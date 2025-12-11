@@ -125,16 +125,98 @@ impl PoolConfig {
 
     /// Validate the configuration.
     pub fn validate(&self) -> Result<(), crate::error::PoolError> {
-        if self.min_connections > self.max_connections {
-            return Err(crate::error::PoolError::Configuration(
-                "min_connections cannot be greater than max_connections".into(),
-            ));
-        }
         if self.max_connections == 0 {
             return Err(crate::error::PoolError::Configuration(
                 "max_connections must be greater than 0".into(),
             ));
         }
+        if self.min_connections > self.max_connections {
+            return Err(crate::error::PoolError::Configuration(
+                "min_connections cannot be greater than max_connections".into(),
+            ));
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let config = PoolConfig::default();
+        assert_eq!(config.min_connections, 1);
+        assert_eq!(config.max_connections, 10);
+        assert!(config.sp_reset_connection);
+        assert!(config.test_on_checkout);
+        assert!(!config.test_on_checkin);
+    }
+
+    #[test]
+    fn test_config_builder_methods() {
+        let config = PoolConfig::new()
+            .min_connections(5)
+            .max_connections(50)
+            .connection_timeout(Duration::from_secs(60))
+            .idle_timeout(Duration::from_secs(120))
+            .max_lifetime(Duration::from_secs(3600))
+            .test_on_checkout(false)
+            .test_on_checkin(true)
+            .sp_reset_connection(false);
+
+        assert_eq!(config.min_connections, 5);
+        assert_eq!(config.max_connections, 50);
+        assert_eq!(config.connection_timeout, Duration::from_secs(60));
+        assert_eq!(config.idle_timeout, Duration::from_secs(120));
+        assert_eq!(config.max_lifetime, Duration::from_secs(3600));
+        assert!(!config.test_on_checkout);
+        assert!(config.test_on_checkin);
+        assert!(!config.sp_reset_connection);
+    }
+
+    #[test]
+    fn test_config_validation_success() {
+        let config = PoolConfig::new()
+            .min_connections(1)
+            .max_connections(10);
+
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_config_validation_min_greater_than_max() {
+        let config = PoolConfig::new()
+            .min_connections(20)
+            .max_connections(10);
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("min_connections cannot be greater than max_connections"));
+    }
+
+    #[test]
+    fn test_config_validation_zero_max() {
+        let mut config = PoolConfig::new();
+        config.max_connections = 0;
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("max_connections must be greater than 0"));
+    }
+
+    #[test]
+    fn test_config_equal_min_max() {
+        let config = PoolConfig::new()
+            .min_connections(5)
+            .max_connections(5);
+
+        assert!(config.validate().is_ok());
     }
 }
