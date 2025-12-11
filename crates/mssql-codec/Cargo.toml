@@ -1,0 +1,31 @@
+[package]
+name = "mssql-codec"
+description = "Async TDS packet framing and codec for SQL Server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["sql-server", "codec", "async", "framing"]
+categories = ["network-programming", "asynchronous"]
+
+[features]
+default = []
+
+[dependencies]
+tds-protocol = { workspace = true }
+mssql-tls = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+pin-project-lite = { workspace = true }
+futures-core = { workspace = true }
+futures-util = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+
+[lints]
+workspace = true
