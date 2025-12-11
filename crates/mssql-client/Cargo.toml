@@ -1,0 +1,49 @@
+[package]
+name = "mssql-client"
+description = "High-level async SQL Server client with type-state connection management"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["sql-server", "mssql", "database", "async", "tokio"]
+categories = ["database", "asynchronous"]
+
+[features]
+default = ["chrono", "uuid", "decimal"]
+chrono = ["mssql-types/chrono"]
+uuid = ["mssql-types/uuid"]
+decimal = ["mssql-types/decimal"]
+json = ["mssql-types/json"]
+otel = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:tracing-opentelemetry",
+]
+
+[dependencies]
+tds-protocol = { workspace = true }
+mssql-tls = { workspace = true }
+mssql-codec = { workspace = true }
+mssql-types = { workspace = true }
+mssql-auth = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+futures-core = { workspace = true }
+futures-util = { workspace = true }
+async-trait = { workspace = true }
+once_cell = { workspace = true }
+regex = { workspace = true }
+
+# Optional: OpenTelemetry integration
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+
+[lints]
+workspace = true
