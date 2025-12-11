@@ -1,0 +1,26 @@
+[package]
+name = "tds-protocol"
+description = "Pure MS-TDS protocol implementation for SQL Server (no_std compatible)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["tds", "sql-server", "protocol", "no_std"]
+categories = ["parser-implementations", "no-std"]
+
+[features]
+default = ["std"]
+std = []
+alloc = []
+
+[dependencies]
+bytes = { workspace = true }
+thiserror = { workspace = true }
+bitflags = "2.6"
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

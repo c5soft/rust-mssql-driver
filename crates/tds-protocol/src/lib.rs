@@ -1,0 +1,52 @@
+//! # tds-protocol
+//!
+//! Pure implementation of the MS-TDS (Tabular Data Stream) protocol used by
+//! Microsoft SQL Server.
+//!
+//! This crate provides `no_std` compatible packet structures, token parsing,
+//! and serialization for TDS protocol versions 7.4 through 8.0.
+//!
+//! ## Features
+//!
+//! - `std` (default): Enable standard library support
+//! - `alloc`: Enable allocation without full std (requires `alloc` crate)
+//!
+//! ## Design Philosophy
+//!
+//! This crate is intentionally IO-agnostic. It contains no networking logic and
+//! makes no assumptions about the async runtime. Higher-level crates build upon
+//! this foundation to provide async I/O capabilities.
+//!
+//! ## Example
+//!
+//! ```rust,ignore
+//! use tds_protocol::{PacketHeader, PacketType, PacketStatus};
+//!
+//! let header = PacketHeader {
+//!     packet_type: PacketType::SqlBatch,
+//!     status: PacketStatus::END_OF_MESSAGE,
+//!     length: 100,
+//!     spid: 0,
+//!     packet_id: 1,
+//!     window: 0,
+//! };
+//! ```
+
+#![cfg_attr(not(feature = "std"), no_std)]
+#![warn(missing_docs)]
+#![deny(unsafe_code)]
+
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
+pub mod codec;
+pub mod error;
+pub mod packet;
+pub mod prelogin;
+pub mod token;
+pub mod types;
+pub mod version;
+
+pub use error::ProtocolError;
+pub use packet::{PacketHeader, PacketStatus, PacketType};
+pub use version::TdsVersion;
