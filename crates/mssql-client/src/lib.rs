@@ -13,6 +13,19 @@
 //! - **Prepared statements**: Automatic caching with LRU eviction
 //! - **Transactions**: Full transaction support with savepoints
 //! - **Azure support**: Automatic routing and failover handling
+//! - **Streaming results**: Memory-efficient processing of large result sets
+//!
+//! ## Type-State Connection Management
+//!
+//! The client uses a compile-time type-state pattern that ensures invalid
+//! operations are caught at compile time rather than runtime:
+//!
+//! ```text
+//! Disconnected -> Ready (via connect())
+//! Ready -> InTransaction (via begin_transaction())
+//! Ready -> Streaming (via query that returns a stream)
+//! InTransaction -> Ready (via commit() or rollback())
+//! ```
 //!
 //! ## Example
 //!
@@ -25,16 +38,30 @@
 //!         "Server=localhost;Database=test;User Id=sa;Password=Password123;"
 //!     )?;
 //!
-//!     let client = Client::connect(config).await?;
+//!     let mut client = Client::connect(config).await?;
 //!
+//!     // Execute a query with parameters
 //!     let rows = client
 //!         .query("SELECT * FROM users WHERE id = @p1", &[&1])
 //!         .await?;
 //!
 //!     for row in rows {
-//!         let name: String = row.get("name")?;
+//!         let name: String = row.get(0)?;
 //!         println!("User: {}", name);
 //!     }
+//!
+//!     // Transactions with savepoint support
+//!     let mut tx = client.begin_transaction().await?;
+//!     tx.execute("INSERT INTO users (name) VALUES (@p1)", &[&"Alice"]).await?;
+//!
+//!     // Create a savepoint for partial rollback
+//!     let sp = tx.savepoint("before_update").await?;
+//!     tx.execute("UPDATE users SET active = 1", &[]).await?;
+//!
+//!     // Rollback to savepoint if needed
+//!     // tx.rollback_to(&sp).await?;
+//!
+//!     tx.commit().await?;
 //!
 //!     Ok(())
 //! }
@@ -49,6 +76,7 @@ pub mod error;
 pub mod query;
 pub mod row;
 pub mod state;
+pub mod stream;
 pub mod transaction;
 
 // Re-export commonly used types
@@ -58,6 +86,7 @@ pub use error::Error;
 pub use mssql_auth::Credentials;
 pub use mssql_types::{FromSql, SqlValue, ToSql};
 pub use query::Query;
-pub use row::Row;
-pub use state::{ConnectionState, Disconnected, InTransaction, Ready};
-pub use transaction::Transaction;
+pub use row::{Column, Row};
+pub use state::{ConnectionState, Disconnected, InTransaction, ProtocolState, Ready, Streaming};
+pub use stream::{ExecuteResult, MultiResultStream, OutputParam, QueryStream};
+pub use transaction::{IsolationLevel, SavePoint, Transaction};

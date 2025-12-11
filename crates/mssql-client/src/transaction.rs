@@ -1,18 +1,44 @@
 //! Transaction support.
+//!
+//! This module provides transaction isolation levels, savepoint support,
+//! and transaction abstractions for SQL Server.
+
+use std::marker::PhantomData;
 
 /// Transaction isolation level.
+///
+/// SQL Server supports these isolation levels for transaction management.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum IsolationLevel {
     /// Read uncommitted (dirty reads allowed).
+    ///
+    /// Lowest isolation - transactions can read uncommitted changes from
+    /// other transactions. Offers best performance but no consistency guarantees.
     ReadUncommitted,
+
     /// Read committed (default for SQL Server).
+    ///
+    /// Transactions can only read committed data. Prevents dirty reads
+    /// but allows non-repeatable reads and phantom reads.
     #[default]
     ReadCommitted,
+
     /// Repeatable read.
+    ///
+    /// Ensures rows read by a transaction don't change during the transaction.
+    /// Prevents dirty reads and non-repeatable reads, but allows phantom reads.
     RepeatableRead,
+
     /// Serializable (highest isolation).
+    ///
+    /// Strictest isolation - transactions are completely isolated from
+    /// each other. Prevents all read phenomena but has highest lock contention.
     Serializable,
+
     /// Snapshot isolation.
+    ///
+    /// Uses row versioning to provide a point-in-time view of data.
+    /// Requires snapshot isolation to be enabled on the database.
     Snapshot,
 }
 
@@ -28,20 +54,134 @@ impl IsolationLevel {
             Self::Snapshot => "SET TRANSACTION ISOLATION LEVEL SNAPSHOT",
         }
     }
+
+    /// Get the isolation level name as used in SQL Server.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::ReadUncommitted => "READ UNCOMMITTED",
+            Self::ReadCommitted => "READ COMMITTED",
+            Self::RepeatableRead => "REPEATABLE READ",
+            Self::Serializable => "SERIALIZABLE",
+            Self::Snapshot => "SNAPSHOT",
+        }
+    }
 }
 
-/// A database transaction.
+/// A savepoint within a transaction.
 ///
-/// This is a placeholder for a higher-level transaction abstraction
-/// that could be used with a closure-based API.
+/// Savepoints allow partial rollbacks within a transaction.
+/// The savepoint name is validated when created to prevent SQL injection.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let mut tx = client.begin_transaction().await?;
+///
+/// tx.execute("INSERT INTO orders (customer_id) VALUES (@p1)", &[&42]).await?;
+/// let sp = tx.savepoint("before_items").await?;
+///
+/// tx.execute("INSERT INTO items (order_id, product_id) VALUES (@p1, @p2)", &[&1, &100]).await?;
+///
+/// // Oops, need to undo the items but keep the order
+/// tx.rollback_to(&sp).await?;
+///
+/// // Continue with different items...
+/// tx.commit().await?;
+/// ```
+#[derive(Debug, Clone)]
+pub struct SavePoint<'tx> {
+    /// The validated savepoint name.
+    pub(crate) name: String,
+    /// Lifetime tied to the transaction.
+    _tx: PhantomData<&'tx ()>,
+}
+
+impl<'tx> SavePoint<'tx> {
+    /// Create a new savepoint with a validated name.
+    ///
+    /// This is called internally after name validation.
+    #[allow(dead_code)] // Used when savepoint creation is implemented
+    pub(crate) fn new(name: String) -> Self {
+        Self {
+            name,
+            _tx: PhantomData,
+        }
+    }
+
+    /// Get the savepoint name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// A database transaction abstraction.
+///
+/// This is a higher-level transaction wrapper that can be used
+/// with closure-based APIs or as a standalone type.
 pub struct Transaction<'a> {
-    _marker: std::marker::PhantomData<&'a ()>,
+    isolation_level: IsolationLevel,
+    _marker: PhantomData<&'a ()>,
 }
 
 impl<'a> Transaction<'a> {
+    /// Create a new transaction with default isolation level.
+    #[allow(dead_code)] // Used when transaction begin is implemented
+    pub(crate) fn new() -> Self {
+        Self {
+            isolation_level: IsolationLevel::default(),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Create a new transaction with specified isolation level.
+    #[allow(dead_code)] // Used when transaction begin is implemented
+    pub(crate) fn with_isolation_level(level: IsolationLevel) -> Self {
+        Self {
+            isolation_level: level,
+            _marker: PhantomData,
+        }
+    }
+
     /// Get the isolation level of this transaction.
     #[must_use]
     pub fn isolation_level(&self) -> IsolationLevel {
-        IsolationLevel::ReadCommitted
+        self.isolation_level
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_isolation_level_sql() {
+        assert_eq!(
+            IsolationLevel::ReadCommitted.as_sql(),
+            "SET TRANSACTION ISOLATION LEVEL READ COMMITTED"
+        );
+        assert_eq!(
+            IsolationLevel::Snapshot.as_sql(),
+            "SET TRANSACTION ISOLATION LEVEL SNAPSHOT"
+        );
+    }
+
+    #[test]
+    fn test_isolation_level_name() {
+        assert_eq!(IsolationLevel::ReadCommitted.name(), "READ COMMITTED");
+        assert_eq!(IsolationLevel::Serializable.name(), "SERIALIZABLE");
+    }
+
+    #[test]
+    fn test_savepoint_name() {
+        let sp = SavePoint::new("my_savepoint".to_string());
+        assert_eq!(sp.name(), "my_savepoint");
+    }
+
+    #[test]
+    fn test_default_isolation_level() {
+        let level = IsolationLevel::default();
+        assert_eq!(level, IsolationLevel::ReadCommitted);
     }
 }
