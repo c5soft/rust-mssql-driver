@@ -31,6 +31,7 @@ use bytes::{Buf, BufMut, Bytes};
 
 use crate::codec::{read_b_varchar, read_us_varchar};
 use crate::error::ProtocolError;
+use crate::types::TypeId;
 
 /// Token type identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -161,10 +162,14 @@ pub struct ColMetaData {
 pub struct ColumnData {
     /// Column name.
     pub name: String,
-    /// Column data type.
+    /// Column data type ID.
+    pub type_id: TypeId,
+    /// Column data type raw byte (for unknown types).
     pub col_type: u8,
     /// Column flags.
     pub flags: u16,
+    /// User type ID.
+    pub user_type: u32,
     /// Type-specific metadata.
     pub type_info: TypeInfo,
 }
@@ -442,6 +447,783 @@ pub struct FedAuthInfo {
     pub sts_url: String,
     /// Service principal name.
     pub spn: String,
+}
+
+// =============================================================================
+// ColMetaData and Row Parsing Implementation
+// =============================================================================
+
+impl ColMetaData {
+    /// Special value indicating no metadata.
+    pub const NO_METADATA: u16 = 0xFFFF;
+
+    /// Decode a COLMETADATA token from bytes.
+    pub fn decode(src: &mut impl Buf) -> Result<Self, ProtocolError> {
+        if src.remaining() < 2 {
+            return Err(ProtocolError::UnexpectedEof);
+        }
+
+        let column_count = src.get_u16_le();
+
+        // 0xFFFF means no metadata present
+        if column_count == Self::NO_METADATA {
+            return Ok(Self {
+                columns: Vec::new(),
+            });
+        }
+
+        let mut columns = Vec::with_capacity(column_count as usize);
+
+        for _ in 0..column_count {
+            let column = Self::decode_column(src)?;
+            columns.push(column);
+        }
+
+        Ok(Self { columns })
+    }
+
+    /// Decode a single column from the metadata.
+    fn decode_column(src: &mut impl Buf) -> Result<ColumnData, ProtocolError> {
+        // UserType (4 bytes) + Flags (2 bytes) + TypeId (1 byte)
+        if src.remaining() < 7 {
+            return Err(ProtocolError::UnexpectedEof);
+        }
+
+        let user_type = src.get_u32_le();
+        let flags = src.get_u16_le();
+        let col_type = src.get_u8();
+
+        let type_id = TypeId::from_u8(col_type)
+            .unwrap_or(TypeId::Null); // Default to Null for unknown types
+
+        // Parse type-specific metadata
+        let type_info = Self::decode_type_info(src, type_id, col_type)?;
+
+        // Read column name (B_VARCHAR format - 1 byte length in characters)
+        let name = read_b_varchar(src).ok_or(ProtocolError::UnexpectedEof)?;
+
+        Ok(ColumnData {
+            name,
+            type_id,
+            col_type,
+            flags,
+            user_type,
+            type_info,
+        })
+    }
+
+    /// Decode type-specific metadata based on the type ID.
+    fn decode_type_info(
+        src: &mut impl Buf,
+        type_id: TypeId,
+        col_type: u8,
+    ) -> Result<TypeInfo, ProtocolError> {
+        match type_id {
+            // Fixed-length types have no additional metadata
+            TypeId::Null => Ok(TypeInfo::default()),
+            TypeId::Int1 | TypeId::Bit => Ok(TypeInfo::default()),
+            TypeId::Int2 => Ok(TypeInfo::default()),
+            TypeId::Int4 => Ok(TypeInfo::default()),
+            TypeId::Int8 => Ok(TypeInfo::default()),
+            TypeId::Float4 => Ok(TypeInfo::default()),
+            TypeId::Float8 => Ok(TypeInfo::default()),
+            TypeId::Money => Ok(TypeInfo::default()),
+            TypeId::Money4 => Ok(TypeInfo::default()),
+            TypeId::DateTime => Ok(TypeInfo::default()),
+            TypeId::DateTime4 => Ok(TypeInfo::default()),
+
+            // Variable length integer/float/money (1-byte max length)
+            TypeId::IntN | TypeId::BitN | TypeId::FloatN | TypeId::MoneyN | TypeId::DateTimeN => {
+                if src.remaining() < 1 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let max_length = src.get_u8() as u32;
+                Ok(TypeInfo {
+                    max_length: Some(max_length),
+                    ..Default::default()
+                })
+            }
+
+            // GUID has 1-byte length
+            TypeId::Guid => {
+                if src.remaining() < 1 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let max_length = src.get_u8() as u32;
+                Ok(TypeInfo {
+                    max_length: Some(max_length),
+                    ..Default::default()
+                })
+            }
+
+            // Decimal/Numeric types (1-byte length + precision + scale)
+            TypeId::Decimal | TypeId::Numeric | TypeId::DecimalN | TypeId::NumericN => {
+                if src.remaining() < 3 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let max_length = src.get_u8() as u32;
+                let precision = src.get_u8();
+                let scale = src.get_u8();
+                Ok(TypeInfo {
+                    max_length: Some(max_length),
+                    precision: Some(precision),
+                    scale: Some(scale),
+                    ..Default::default()
+                })
+            }
+
+            // Old-style byte-length strings (Char, VarChar, Binary, VarBinary)
+            TypeId::Char | TypeId::VarChar | TypeId::Binary | TypeId::VarBinary => {
+                if src.remaining() < 1 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let max_length = src.get_u8() as u32;
+                Ok(TypeInfo {
+                    max_length: Some(max_length),
+                    ..Default::default()
+                })
+            }
+
+            // Big varchar/binary with 2-byte length + collation for strings
+            TypeId::BigVarChar | TypeId::BigChar => {
+                if src.remaining() < 7 {
+                    // 2 (length) + 5 (collation)
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let max_length = src.get_u16_le() as u32;
+                let collation = Self::decode_collation(src)?;
+                Ok(TypeInfo {
+                    max_length: Some(max_length),
+                    collation: Some(collation),
+                    ..Default::default()
+                })
+            }
+
+            // Big binary (2-byte length, no collation)
+            TypeId::BigVarBinary | TypeId::BigBinary => {
+                if src.remaining() < 2 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let max_length = src.get_u16_le() as u32;
+                Ok(TypeInfo {
+                    max_length: Some(max_length),
+                    ..Default::default()
+                })
+            }
+
+            // Unicode strings (NChar, NVarChar) - 2-byte length + collation
+            TypeId::NChar | TypeId::NVarChar => {
+                if src.remaining() < 7 {
+                    // 2 (length) + 5 (collation)
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let max_length = src.get_u16_le() as u32;
+                let collation = Self::decode_collation(src)?;
+                Ok(TypeInfo {
+                    max_length: Some(max_length),
+                    collation: Some(collation),
+                    ..Default::default()
+                })
+            }
+
+            // Date type (no additional metadata)
+            TypeId::Date => Ok(TypeInfo::default()),
+
+            // Time, DateTime2, DateTimeOffset have scale
+            TypeId::Time | TypeId::DateTime2 | TypeId::DateTimeOffset => {
+                if src.remaining() < 1 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let scale = src.get_u8();
+                Ok(TypeInfo {
+                    scale: Some(scale),
+                    ..Default::default()
+                })
+            }
+
+            // Text/NText/Image (deprecated LOB types)
+            TypeId::Text | TypeId::NText | TypeId::Image => {
+                // These have complex metadata: length (4) + collation (5) + table name parts
+                if src.remaining() < 4 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let max_length = src.get_u32_le();
+
+                // For Text/NText, read collation
+                let collation = if type_id == TypeId::Text || type_id == TypeId::NText {
+                    if src.remaining() < 5 {
+                        return Err(ProtocolError::UnexpectedEof);
+                    }
+                    Some(Self::decode_collation(src)?)
+                } else {
+                    None
+                };
+
+                // Skip table name parts (variable length)
+                // Format: numParts (1 byte) followed by us_varchar for each part
+                if src.remaining() < 1 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let num_parts = src.get_u8();
+                for _ in 0..num_parts {
+                    // Read and discard table name part
+                    let _ = read_us_varchar(src).ok_or(ProtocolError::UnexpectedEof)?;
+                }
+
+                Ok(TypeInfo {
+                    max_length: Some(max_length),
+                    collation,
+                    ..Default::default()
+                })
+            }
+
+            // XML type
+            TypeId::Xml => {
+                if src.remaining() < 1 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let schema_present = src.get_u8();
+
+                if schema_present != 0 {
+                    // Read schema info (3 us_varchar strings)
+                    let _ = read_us_varchar(src).ok_or(ProtocolError::UnexpectedEof)?; // db name
+                    let _ = read_us_varchar(src).ok_or(ProtocolError::UnexpectedEof)?; // owning schema
+                    let _ = read_us_varchar(src).ok_or(ProtocolError::UnexpectedEof)?; // xml schema collection
+                }
+
+                Ok(TypeInfo::default())
+            }
+
+            // UDT (User-defined type) - complex metadata
+            TypeId::Udt => {
+                // Max length (2 bytes)
+                if src.remaining() < 2 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let max_length = src.get_u16_le() as u32;
+
+                // UDT metadata: db name, schema name, type name, assembly qualified name
+                let _ = read_us_varchar(src).ok_or(ProtocolError::UnexpectedEof)?; // db name
+                let _ = read_us_varchar(src).ok_or(ProtocolError::UnexpectedEof)?; // schema name
+                let _ = read_us_varchar(src).ok_or(ProtocolError::UnexpectedEof)?; // type name
+                let _ = read_us_varchar(src).ok_or(ProtocolError::UnexpectedEof)?; // assembly qualified name
+
+                Ok(TypeInfo {
+                    max_length: Some(max_length),
+                    ..Default::default()
+                })
+            }
+
+            // Table-valued parameter - complex metadata (skip for now)
+            TypeId::Tvp => {
+                // TVP has very complex metadata, not commonly used
+                // For now, we can't properly parse this
+                Err(ProtocolError::InvalidTokenType(col_type))
+            }
+
+            // SQL Variant - 4-byte length
+            TypeId::Variant => {
+                if src.remaining() < 4 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let max_length = src.get_u32_le();
+                Ok(TypeInfo {
+                    max_length: Some(max_length),
+                    ..Default::default()
+                })
+            }
+        }
+    }
+
+    /// Decode collation information (5 bytes).
+    fn decode_collation(src: &mut impl Buf) -> Result<Collation, ProtocolError> {
+        if src.remaining() < 5 {
+            return Err(ProtocolError::UnexpectedEof);
+        }
+        // Collation: LCID (4 bytes) + Sort ID (1 byte)
+        let lcid = src.get_u32_le();
+        let sort_id = src.get_u8();
+        Ok(Collation { lcid, sort_id })
+    }
+
+    /// Get the number of columns.
+    #[must_use]
+    pub fn column_count(&self) -> usize {
+        self.columns.len()
+    }
+
+    /// Check if this represents no metadata.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.columns.is_empty()
+    }
+}
+
+impl ColumnData {
+    /// Check if this column is nullable.
+    #[must_use]
+    pub fn is_nullable(&self) -> bool {
+        (self.flags & 0x0001) != 0
+    }
+
+    /// Get the fixed size in bytes for this column, if applicable.
+    ///
+    /// Returns `None` for variable-length types.
+    #[must_use]
+    pub fn fixed_size(&self) -> Option<usize> {
+        match self.type_id {
+            TypeId::Null => Some(0),
+            TypeId::Int1 | TypeId::Bit => Some(1),
+            TypeId::Int2 => Some(2),
+            TypeId::Int4 => Some(4),
+            TypeId::Int8 => Some(8),
+            TypeId::Float4 => Some(4),
+            TypeId::Float8 => Some(8),
+            TypeId::Money => Some(8),
+            TypeId::Money4 => Some(4),
+            TypeId::DateTime => Some(8),
+            TypeId::DateTime4 => Some(4),
+            TypeId::Date => Some(3),
+            _ => None,
+        }
+    }
+}
+
+// =============================================================================
+// Row Parsing Implementation
+// =============================================================================
+
+impl RawRow {
+    /// Decode a ROW token from bytes.
+    ///
+    /// This function requires the column metadata to know how to parse the row.
+    /// The row data is stored as raw bytes for later parsing.
+    pub fn decode(src: &mut impl Buf, metadata: &ColMetaData) -> Result<Self, ProtocolError> {
+        let mut data = bytes::BytesMut::new();
+
+        for col in &metadata.columns {
+            Self::decode_column_value(src, col, &mut data)?;
+        }
+
+        Ok(Self {
+            data: data.freeze(),
+        })
+    }
+
+    /// Decode a single column value and append to the output buffer.
+    fn decode_column_value(
+        src: &mut impl Buf,
+        col: &ColumnData,
+        dst: &mut bytes::BytesMut,
+    ) -> Result<(), ProtocolError> {
+        match col.type_id {
+            // Fixed-length types
+            TypeId::Null => {
+                // No data
+            }
+            TypeId::Int1 | TypeId::Bit => {
+                if src.remaining() < 1 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                dst.extend_from_slice(&[src.get_u8()]);
+            }
+            TypeId::Int2 => {
+                if src.remaining() < 2 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                dst.extend_from_slice(&src.get_u16_le().to_le_bytes());
+            }
+            TypeId::Int4 => {
+                if src.remaining() < 4 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                dst.extend_from_slice(&src.get_u32_le().to_le_bytes());
+            }
+            TypeId::Int8 => {
+                if src.remaining() < 8 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                dst.extend_from_slice(&src.get_u64_le().to_le_bytes());
+            }
+            TypeId::Float4 => {
+                if src.remaining() < 4 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                dst.extend_from_slice(&src.get_u32_le().to_le_bytes());
+            }
+            TypeId::Float8 => {
+                if src.remaining() < 8 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                dst.extend_from_slice(&src.get_u64_le().to_le_bytes());
+            }
+            TypeId::Money => {
+                if src.remaining() < 8 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let hi = src.get_u32_le();
+                let lo = src.get_u32_le();
+                dst.extend_from_slice(&hi.to_le_bytes());
+                dst.extend_from_slice(&lo.to_le_bytes());
+            }
+            TypeId::Money4 => {
+                if src.remaining() < 4 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                dst.extend_from_slice(&src.get_u32_le().to_le_bytes());
+            }
+            TypeId::DateTime => {
+                if src.remaining() < 8 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let days = src.get_u32_le();
+                let time = src.get_u32_le();
+                dst.extend_from_slice(&days.to_le_bytes());
+                dst.extend_from_slice(&time.to_le_bytes());
+            }
+            TypeId::DateTime4 => {
+                if src.remaining() < 4 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                dst.extend_from_slice(&src.get_u32_le().to_le_bytes());
+            }
+            TypeId::Date => {
+                if src.remaining() < 3 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let b1 = src.get_u8();
+                let b2 = src.get_u8();
+                let b3 = src.get_u8();
+                dst.extend_from_slice(&[b1, b2, b3]);
+            }
+
+            // Variable-length nullable types (length-prefixed)
+            TypeId::IntN | TypeId::BitN | TypeId::FloatN | TypeId::MoneyN | TypeId::DateTimeN => {
+                Self::decode_bytelen_type(src, dst)?;
+            }
+
+            TypeId::Guid => {
+                Self::decode_bytelen_type(src, dst)?;
+            }
+
+            TypeId::Decimal
+            | TypeId::Numeric
+            | TypeId::DecimalN
+            | TypeId::NumericN => {
+                Self::decode_bytelen_type(src, dst)?;
+            }
+
+            // Old-style byte-length strings
+            TypeId::Char | TypeId::VarChar | TypeId::Binary | TypeId::VarBinary => {
+                Self::decode_bytelen_type(src, dst)?;
+            }
+
+            // 2-byte length strings
+            TypeId::BigVarChar | TypeId::BigChar | TypeId::BigVarBinary | TypeId::BigBinary => {
+                Self::decode_ushortlen_type(src, dst)?;
+            }
+
+            // Unicode strings (2-byte length in bytes, not characters)
+            TypeId::NChar | TypeId::NVarChar => {
+                Self::decode_ushortlen_type(src, dst)?;
+            }
+
+            // Time types with scale
+            TypeId::Time | TypeId::DateTime2 | TypeId::DateTimeOffset => {
+                Self::decode_bytelen_type(src, dst)?;
+            }
+
+            // PLP (Partially Length Prefixed) types
+            TypeId::Text | TypeId::NText | TypeId::Image | TypeId::Xml => {
+                Self::decode_plp_type(src, dst)?;
+            }
+
+            // Complex types
+            TypeId::Variant => {
+                Self::decode_intlen_type(src, dst)?;
+            }
+
+            TypeId::Udt => {
+                // UDT uses PLP encoding
+                Self::decode_plp_type(src, dst)?;
+            }
+
+            TypeId::Tvp => {
+                // TVP not supported in row data
+                return Err(ProtocolError::InvalidTokenType(col.col_type));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Decode a 1-byte length-prefixed value.
+    fn decode_bytelen_type(src: &mut impl Buf, dst: &mut bytes::BytesMut) -> Result<(), ProtocolError> {
+        if src.remaining() < 1 {
+            return Err(ProtocolError::UnexpectedEof);
+        }
+        let len = src.get_u8() as usize;
+        if len == 0xFF {
+            // NULL value - store as zero-length with NULL marker
+            dst.extend_from_slice(&[0xFF]);
+        } else if len == 0 {
+            // Empty value
+            dst.extend_from_slice(&[0x00]);
+        } else {
+            if src.remaining() < len {
+                return Err(ProtocolError::UnexpectedEof);
+            }
+            dst.extend_from_slice(&[len as u8]);
+            for _ in 0..len {
+                dst.extend_from_slice(&[src.get_u8()]);
+            }
+        }
+        Ok(())
+    }
+
+    /// Decode a 2-byte length-prefixed value.
+    fn decode_ushortlen_type(src: &mut impl Buf, dst: &mut bytes::BytesMut) -> Result<(), ProtocolError> {
+        if src.remaining() < 2 {
+            return Err(ProtocolError::UnexpectedEof);
+        }
+        let len = src.get_u16_le() as usize;
+        if len == 0xFFFF {
+            // NULL value
+            dst.extend_from_slice(&0xFFFFu16.to_le_bytes());
+        } else if len == 0 {
+            // Empty value
+            dst.extend_from_slice(&0u16.to_le_bytes());
+        } else {
+            if src.remaining() < len {
+                return Err(ProtocolError::UnexpectedEof);
+            }
+            dst.extend_from_slice(&(len as u16).to_le_bytes());
+            for _ in 0..len {
+                dst.extend_from_slice(&[src.get_u8()]);
+            }
+        }
+        Ok(())
+    }
+
+    /// Decode a 4-byte length-prefixed value.
+    fn decode_intlen_type(src: &mut impl Buf, dst: &mut bytes::BytesMut) -> Result<(), ProtocolError> {
+        if src.remaining() < 4 {
+            return Err(ProtocolError::UnexpectedEof);
+        }
+        let len = src.get_u32_le() as usize;
+        if len == 0xFFFFFFFF {
+            // NULL value
+            dst.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes());
+        } else if len == 0 {
+            // Empty value
+            dst.extend_from_slice(&0u32.to_le_bytes());
+        } else {
+            if src.remaining() < len {
+                return Err(ProtocolError::UnexpectedEof);
+            }
+            dst.extend_from_slice(&(len as u32).to_le_bytes());
+            for _ in 0..len {
+                dst.extend_from_slice(&[src.get_u8()]);
+            }
+        }
+        Ok(())
+    }
+
+    /// Decode a PLP (Partially Length-Prefixed) value.
+    ///
+    /// PLP format:
+    /// - 8 bytes: total length (0xFFFFFFFFFFFFFFFE = unknown, 0xFFFFFFFFFFFFFFFF = NULL)
+    /// - If not NULL: chunks of (4 byte chunk length + data) until chunk length = 0
+    fn decode_plp_type(src: &mut impl Buf, dst: &mut bytes::BytesMut) -> Result<(), ProtocolError> {
+        if src.remaining() < 8 {
+            return Err(ProtocolError::UnexpectedEof);
+        }
+
+        let total_len = src.get_u64_le();
+
+        // Store the total length marker
+        dst.extend_from_slice(&total_len.to_le_bytes());
+
+        if total_len == 0xFFFFFFFFFFFFFFFF {
+            // NULL value - no more data
+            return Ok(());
+        }
+
+        // Read chunks until terminator
+        loop {
+            if src.remaining() < 4 {
+                return Err(ProtocolError::UnexpectedEof);
+            }
+            let chunk_len = src.get_u32_le() as usize;
+            dst.extend_from_slice(&(chunk_len as u32).to_le_bytes());
+
+            if chunk_len == 0 {
+                // End of PLP data
+                break;
+            }
+
+            if src.remaining() < chunk_len {
+                return Err(ProtocolError::UnexpectedEof);
+            }
+
+            for _ in 0..chunk_len {
+                dst.extend_from_slice(&[src.get_u8()]);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// =============================================================================
+// NbcRow Parsing Implementation
+// =============================================================================
+
+impl NbcRow {
+    /// Decode an NBCROW token from bytes.
+    ///
+    /// NBCROW (Null Bitmap Compressed Row) stores a bitmap indicating which
+    /// columns are NULL, followed by only the non-NULL values.
+    pub fn decode(src: &mut impl Buf, metadata: &ColMetaData) -> Result<Self, ProtocolError> {
+        let col_count = metadata.columns.len();
+        let bitmap_len = (col_count + 7) / 8;
+
+        if src.remaining() < bitmap_len {
+            return Err(ProtocolError::UnexpectedEof);
+        }
+
+        // Read null bitmap
+        let mut null_bitmap = vec![0u8; bitmap_len];
+        for byte in &mut null_bitmap {
+            *byte = src.get_u8();
+        }
+
+        // Read non-null values
+        let mut data = bytes::BytesMut::new();
+
+        for (i, col) in metadata.columns.iter().enumerate() {
+            let byte_idx = i / 8;
+            let bit_idx = i % 8;
+            let is_null = (null_bitmap[byte_idx] & (1 << bit_idx)) != 0;
+
+            if !is_null {
+                // Read the value - for NBCROW, we read without the length prefix
+                // for fixed-length types, and with length prefix for variable types
+                RawRow::decode_column_value(src, col, &mut data)?;
+            }
+        }
+
+        Ok(Self {
+            null_bitmap,
+            data: data.freeze(),
+        })
+    }
+
+    /// Check if a column at the given index is NULL.
+    #[must_use]
+    pub fn is_null(&self, column_index: usize) -> bool {
+        let byte_idx = column_index / 8;
+        let bit_idx = column_index % 8;
+        if byte_idx < self.null_bitmap.len() {
+            (self.null_bitmap[byte_idx] & (1 << bit_idx)) != 0
+        } else {
+            true // Out of bounds = NULL
+        }
+    }
+}
+
+// =============================================================================
+// ReturnValue Parsing Implementation
+// =============================================================================
+
+impl ReturnValue {
+    /// Decode a RETURNVALUE token from bytes.
+    pub fn decode(src: &mut impl Buf) -> Result<Self, ProtocolError> {
+        // Length (2 bytes)
+        if src.remaining() < 2 {
+            return Err(ProtocolError::UnexpectedEof);
+        }
+        let _length = src.get_u16_le();
+
+        // Parameter ordinal (2 bytes)
+        if src.remaining() < 2 {
+            return Err(ProtocolError::UnexpectedEof);
+        }
+        let param_ordinal = src.get_u16_le();
+
+        // Parameter name (B_VARCHAR)
+        let param_name = read_b_varchar(src).ok_or(ProtocolError::UnexpectedEof)?;
+
+        // Status (1 byte)
+        if src.remaining() < 1 {
+            return Err(ProtocolError::UnexpectedEof);
+        }
+        let status = src.get_u8();
+
+        // User type (4 bytes) + flags (2 bytes) + type id (1 byte)
+        if src.remaining() < 7 {
+            return Err(ProtocolError::UnexpectedEof);
+        }
+        let user_type = src.get_u32_le();
+        let flags = src.get_u16_le();
+        let col_type = src.get_u8();
+
+        let type_id = TypeId::from_u8(col_type).unwrap_or(TypeId::Null);
+
+        // Parse type info
+        let type_info = ColMetaData::decode_type_info(src, type_id, col_type)?;
+
+        // Read the value data
+        let mut value_buf = bytes::BytesMut::new();
+
+        // Create a temporary column for value parsing
+        let temp_col = ColumnData {
+            name: String::new(),
+            type_id,
+            col_type,
+            flags,
+            user_type,
+            type_info: type_info.clone(),
+        };
+
+        RawRow::decode_column_value(src, &temp_col, &mut value_buf)?;
+
+        Ok(Self {
+            param_ordinal,
+            param_name,
+            status,
+            user_type,
+            flags,
+            type_info,
+            value: value_buf.freeze(),
+        })
+    }
+}
+
+// =============================================================================
+// SessionState Parsing Implementation
+// =============================================================================
+
+impl SessionState {
+    /// Decode a SESSIONSTATE token from bytes.
+    pub fn decode(src: &mut impl Buf) -> Result<Self, ProtocolError> {
+        if src.remaining() < 4 {
+            return Err(ProtocolError::UnexpectedEof);
+        }
+
+        let length = src.get_u32_le() as usize;
+
+        if src.remaining() < length {
+            return Err(ProtocolError::IncompletePacket {
+                expected: length,
+                actual: src.remaining(),
+            });
+        }
+
+        let data = src.copy_to_bytes(length);
+
+        Ok(Self { data })
+    }
 }
 
 // =============================================================================
@@ -1055,6 +1837,39 @@ impl FedAuthInfo {
 /// Token stream parser.
 ///
 /// Parses a stream of TDS tokens from a byte buffer.
+///
+/// # Basic vs Context-Aware Parsing
+///
+/// Some tokens (like `Done`, `Error`, `LoginAck`) can be parsed without context.
+/// Use [`next_token()`](TokenParser::next_token) for these.
+///
+/// Other tokens (like `ColMetaData`, `Row`, `NbcRow`) require column metadata
+/// to parse correctly. Use [`next_token_with_metadata()`](TokenParser::next_token_with_metadata)
+/// for these.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let mut parser = TokenParser::new(data);
+/// let mut metadata = None;
+///
+/// while let Some(token) = parser.next_token_with_metadata(metadata.as_ref())? {
+///     match token {
+///         Token::ColMetaData(meta) => {
+///             metadata = Some(meta);
+///         }
+///         Token::Row(row) => {
+///             // Process row using metadata
+///         }
+///         Token::Done(done) => {
+///             if !done.has_more() {
+///                 break;
+///             }
+///         }
+///         _ => {}
+///     }
+/// }
+/// ```
 pub struct TokenParser {
     data: Bytes,
     position: usize,
@@ -1079,10 +1894,37 @@ impl TokenParser {
         self.position < self.data.len()
     }
 
+    /// Peek at the next token type without consuming it.
+    #[must_use]
+    pub fn peek_token_type(&self) -> Option<TokenType> {
+        if self.position < self.data.len() {
+            TokenType::from_u8(self.data[self.position])
+        } else {
+            None
+        }
+    }
+
     /// Parse the next token from the stream.
+    ///
+    /// This method can only parse context-independent tokens. For tokens that
+    /// require column metadata (ColMetaData, Row, NbcRow), use
+    /// [`next_token_with_metadata()`](TokenParser::next_token_with_metadata).
     ///
     /// Returns `None` if no more tokens are available.
     pub fn next_token(&mut self) -> Result<Option<Token>, ProtocolError> {
+        self.next_token_with_metadata(None)
+    }
+
+    /// Parse the next token with optional column metadata context.
+    ///
+    /// When `metadata` is provided, this method can parse Row and NbcRow tokens.
+    /// Without metadata, those tokens will return an error.
+    ///
+    /// Returns `None` if no more tokens are available.
+    pub fn next_token_with_metadata(
+        &mut self,
+        metadata: Option<&ColMetaData>,
+    ) -> Result<Option<Token>, ProtocolError> {
         if !self.has_remaining() {
             return Ok(None);
         }
@@ -1145,17 +1987,60 @@ impl TokenParser {
                 let status = buf.get_i32_le();
                 Token::ReturnStatus(status)
             }
-            Some(TokenType::ColMetaData)
-            | Some(TokenType::Row)
-            | Some(TokenType::NbcRow)
-            | Some(TokenType::ReturnValue)
-            | Some(TokenType::SessionState)
-            | Some(TokenType::ColInfo)
-            | Some(TokenType::TabName)
-            | Some(TokenType::Offset) => {
-                // These tokens require additional context (column metadata) to parse.
-                // Return an error indicating they need special handling.
-                return Err(ProtocolError::InvalidTokenType(token_type_byte));
+            Some(TokenType::ColMetaData) => {
+                let col_meta = ColMetaData::decode(&mut buf)?;
+                Token::ColMetaData(col_meta)
+            }
+            Some(TokenType::Row) => {
+                let meta = metadata.ok_or_else(|| {
+                    ProtocolError::StringEncoding(
+                        #[cfg(feature = "std")]
+                        "Row token requires column metadata".to_string(),
+                        #[cfg(not(feature = "std"))]
+                        "Row token requires column metadata",
+                    )
+                })?;
+                let row = RawRow::decode(&mut buf, meta)?;
+                Token::Row(row)
+            }
+            Some(TokenType::NbcRow) => {
+                let meta = metadata.ok_or_else(|| {
+                    ProtocolError::StringEncoding(
+                        #[cfg(feature = "std")]
+                        "NbcRow token requires column metadata".to_string(),
+                        #[cfg(not(feature = "std"))]
+                        "NbcRow token requires column metadata",
+                    )
+                })?;
+                let row = NbcRow::decode(&mut buf, meta)?;
+                Token::NbcRow(row)
+            }
+            Some(TokenType::ReturnValue) => {
+                let ret_val = ReturnValue::decode(&mut buf)?;
+                Token::ReturnValue(ret_val)
+            }
+            Some(TokenType::SessionState) => {
+                let session = SessionState::decode(&mut buf)?;
+                Token::SessionState(session)
+            }
+            Some(TokenType::ColInfo) | Some(TokenType::TabName) | Some(TokenType::Offset) => {
+                // These tokens are rarely used and have complex formats.
+                // Skip them by reading the length and advancing.
+                if buf.remaining() < 2 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let length = buf.get_u16_le() as usize;
+                if buf.remaining() < length {
+                    return Err(ProtocolError::IncompletePacket {
+                        expected: length,
+                        actual: buf.remaining(),
+                    });
+                }
+                // Skip the data
+                buf.advance(length);
+                // Recursively get the next token
+                self.position = start_pos + (self.data.len() - start_pos - buf.remaining());
+                return self.next_token_with_metadata(metadata);
             }
             None => {
                 return Err(ProtocolError::InvalidTokenType(token_type_byte));
@@ -1167,6 +2052,91 @@ impl TokenParser {
         self.position = start_pos + consumed;
 
         Ok(Some(token))
+    }
+
+    /// Skip the current token without fully parsing it.
+    ///
+    /// This is useful for skipping unknown or uninteresting tokens.
+    pub fn skip_token(&mut self) -> Result<(), ProtocolError> {
+        if !self.has_remaining() {
+            return Ok(());
+        }
+
+        let token_type_byte = self.data[self.position];
+        let token_type = TokenType::from_u8(token_type_byte);
+
+        // Calculate how many bytes to skip based on token type
+        let skip_amount = match token_type {
+            // Fixed-size tokens
+            Some(TokenType::Done) | Some(TokenType::DoneProc) | Some(TokenType::DoneInProc) => {
+                1 + Done::SIZE // token type + 12 bytes
+            }
+            Some(TokenType::ReturnStatus) => {
+                1 + 4 // token type + 4 bytes
+            }
+            // Variable-length tokens with 2-byte length prefix
+            Some(TokenType::Error)
+            | Some(TokenType::Info)
+            | Some(TokenType::LoginAck)
+            | Some(TokenType::EnvChange)
+            | Some(TokenType::Order)
+            | Some(TokenType::Sspi)
+            | Some(TokenType::ColInfo)
+            | Some(TokenType::TabName)
+            | Some(TokenType::Offset)
+            | Some(TokenType::ReturnValue) => {
+                if self.remaining() < 3 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let length = u16::from_le_bytes([self.data[self.position + 1], self.data[self.position + 2]]) as usize;
+                1 + 2 + length // token type + length prefix + data
+            }
+            // Tokens with 4-byte length prefix
+            Some(TokenType::SessionState) | Some(TokenType::FedAuthInfo) => {
+                if self.remaining() < 5 {
+                    return Err(ProtocolError::UnexpectedEof);
+                }
+                let length = u32::from_le_bytes([
+                    self.data[self.position + 1],
+                    self.data[self.position + 2],
+                    self.data[self.position + 3],
+                    self.data[self.position + 4],
+                ]) as usize;
+                1 + 4 + length
+            }
+            // FeatureExtAck has no length prefix - must parse
+            Some(TokenType::FeatureExtAck) => {
+                // Parse to find end
+                let mut buf = &self.data[self.position + 1..];
+                let _ = FeatureExtAck::decode(&mut buf)?;
+                self.data.len() - self.position - buf.remaining()
+            }
+            // ColMetaData, Row, NbcRow require context and can't be easily skipped
+            Some(TokenType::ColMetaData) | Some(TokenType::Row) | Some(TokenType::NbcRow) => {
+                return Err(ProtocolError::InvalidTokenType(token_type_byte));
+            }
+            None => {
+                return Err(ProtocolError::InvalidTokenType(token_type_byte));
+            }
+        };
+
+        if self.remaining() < skip_amount {
+            return Err(ProtocolError::UnexpectedEof);
+        }
+
+        self.position += skip_amount;
+        Ok(())
+    }
+
+    /// Get the current position in the buffer.
+    #[must_use]
+    pub fn position(&self) -> usize {
+        self.position
+    }
+
+    /// Reset the parser to the beginning.
+    pub fn reset(&mut self) {
+        self.position = 0;
     }
 }
 
@@ -1273,5 +2243,256 @@ mod tests {
             Some(EnvChangeType::Routing)
         );
         assert_eq!(EnvChangeType::from_u8(100), None);
+    }
+
+    #[test]
+    fn test_colmetadata_no_columns() {
+        // No metadata marker (0xFFFF)
+        let data = Bytes::from_static(&[0xFF, 0xFF]);
+        let mut cursor: &[u8] = &data;
+        let meta = ColMetaData::decode(&mut cursor).unwrap();
+        assert!(meta.is_empty());
+        assert_eq!(meta.column_count(), 0);
+    }
+
+    #[test]
+    fn test_colmetadata_single_int_column() {
+        // COLMETADATA with 1 INT column
+        // Format: column_count (2) + [user_type (4) + flags (2) + type_id (1) + name (b_varchar)]
+        let mut data = BytesMut::new();
+        data.extend_from_slice(&[0x01, 0x00]); // 1 column
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // user_type = 0
+        data.extend_from_slice(&[0x01, 0x00]); // flags (nullable)
+        data.extend_from_slice(&[0x38]); // TypeId::Int4
+        // Column name "id" as B_VARCHAR (1 byte length + UTF-16LE)
+        data.extend_from_slice(&[0x02]); // 2 characters
+        data.extend_from_slice(&[b'i', 0x00, b'd', 0x00]); // "id" in UTF-16LE
+
+        let mut cursor: &[u8] = &data;
+        let meta = ColMetaData::decode(&mut cursor).unwrap();
+
+        assert_eq!(meta.column_count(), 1);
+        assert_eq!(meta.columns[0].name, "id");
+        assert_eq!(meta.columns[0].type_id, TypeId::Int4);
+        assert!(meta.columns[0].is_nullable());
+    }
+
+    #[test]
+    fn test_colmetadata_nvarchar_column() {
+        // COLMETADATA with 1 NVARCHAR(50) column
+        let mut data = BytesMut::new();
+        data.extend_from_slice(&[0x01, 0x00]); // 1 column
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // user_type = 0
+        data.extend_from_slice(&[0x01, 0x00]); // flags (nullable)
+        data.extend_from_slice(&[0xE7]); // TypeId::NVarChar
+        // Type info: max_length (2 bytes) + collation (5 bytes)
+        data.extend_from_slice(&[0x64, 0x00]); // max_length = 100 (50 chars * 2)
+        data.extend_from_slice(&[0x09, 0x04, 0xD0, 0x00, 0x34]); // collation
+        // Column name "name"
+        data.extend_from_slice(&[0x04]); // 4 characters
+        data.extend_from_slice(&[b'n', 0x00, b'a', 0x00, b'm', 0x00, b'e', 0x00]);
+
+        let mut cursor: &[u8] = &data;
+        let meta = ColMetaData::decode(&mut cursor).unwrap();
+
+        assert_eq!(meta.column_count(), 1);
+        assert_eq!(meta.columns[0].name, "name");
+        assert_eq!(meta.columns[0].type_id, TypeId::NVarChar);
+        assert_eq!(meta.columns[0].type_info.max_length, Some(100));
+        assert!(meta.columns[0].type_info.collation.is_some());
+    }
+
+    #[test]
+    fn test_raw_row_decode_int() {
+        // Create metadata for a single INT column
+        let metadata = ColMetaData {
+            columns: vec![ColumnData {
+                name: "id".to_string(),
+                type_id: TypeId::Int4,
+                col_type: 0x38,
+                flags: 0,
+                user_type: 0,
+                type_info: TypeInfo::default(),
+            }],
+        };
+
+        // Row data: just 4 bytes for the int value 42
+        let data = Bytes::from_static(&[0x2A, 0x00, 0x00, 0x00]); // 42 in little-endian
+        let mut cursor: &[u8] = &data;
+        let row = RawRow::decode(&mut cursor, &metadata).unwrap();
+
+        // The raw data should contain the 4 bytes
+        assert_eq!(row.data.len(), 4);
+        assert_eq!(&row.data[..], &[0x2A, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_raw_row_decode_nullable_int() {
+        // Create metadata for a nullable INT column (IntN)
+        let metadata = ColMetaData {
+            columns: vec![ColumnData {
+                name: "id".to_string(),
+                type_id: TypeId::IntN,
+                col_type: 0x26,
+                flags: 0x01, // nullable
+                user_type: 0,
+                type_info: TypeInfo {
+                    max_length: Some(4),
+                    ..Default::default()
+                },
+            }],
+        };
+
+        // Row data with value: 1 byte length + 4 bytes value
+        let data = Bytes::from_static(&[0x04, 0x2A, 0x00, 0x00, 0x00]); // length=4, value=42
+        let mut cursor: &[u8] = &data;
+        let row = RawRow::decode(&mut cursor, &metadata).unwrap();
+
+        assert_eq!(row.data.len(), 5);
+        assert_eq!(row.data[0], 4); // length
+        assert_eq!(&row.data[1..], &[0x2A, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_raw_row_decode_null_value() {
+        // Create metadata for a nullable INT column (IntN)
+        let metadata = ColMetaData {
+            columns: vec![ColumnData {
+                name: "id".to_string(),
+                type_id: TypeId::IntN,
+                col_type: 0x26,
+                flags: 0x01, // nullable
+                user_type: 0,
+                type_info: TypeInfo {
+                    max_length: Some(4),
+                    ..Default::default()
+                },
+            }],
+        };
+
+        // NULL value: length = 0xFF (for bytelen types)
+        let data = Bytes::from_static(&[0xFF]);
+        let mut cursor: &[u8] = &data;
+        let row = RawRow::decode(&mut cursor, &metadata).unwrap();
+
+        assert_eq!(row.data.len(), 1);
+        assert_eq!(row.data[0], 0xFF); // NULL marker
+    }
+
+    #[test]
+    fn test_nbcrow_null_bitmap() {
+        let row = NbcRow {
+            null_bitmap: vec![0b00000101], // columns 0 and 2 are NULL
+            data: Bytes::new(),
+        };
+
+        assert!(row.is_null(0));
+        assert!(!row.is_null(1));
+        assert!(row.is_null(2));
+        assert!(!row.is_null(3));
+    }
+
+    #[test]
+    fn test_token_parser_colmetadata() {
+        // Build a COLMETADATA token with 1 INT column
+        let mut data = BytesMut::new();
+        data.extend_from_slice(&[0x81]); // COLMETADATA token type
+        data.extend_from_slice(&[0x01, 0x00]); // 1 column
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // user_type = 0
+        data.extend_from_slice(&[0x01, 0x00]); // flags (nullable)
+        data.extend_from_slice(&[0x38]); // TypeId::Int4
+        data.extend_from_slice(&[0x02]); // column name length
+        data.extend_from_slice(&[b'i', 0x00, b'd', 0x00]); // "id"
+
+        let mut parser = TokenParser::new(data.freeze());
+        let token = parser.next_token().unwrap().unwrap();
+
+        match token {
+            Token::ColMetaData(meta) => {
+                assert_eq!(meta.column_count(), 1);
+                assert_eq!(meta.columns[0].name, "id");
+                assert_eq!(meta.columns[0].type_id, TypeId::Int4);
+            }
+            _ => panic!("Expected ColMetaData token"),
+        }
+    }
+
+    #[test]
+    fn test_token_parser_row_with_metadata() {
+        // Build metadata
+        let metadata = ColMetaData {
+            columns: vec![ColumnData {
+                name: "id".to_string(),
+                type_id: TypeId::Int4,
+                col_type: 0x38,
+                flags: 0,
+                user_type: 0,
+                type_info: TypeInfo::default(),
+            }],
+        };
+
+        // Build ROW token
+        let mut data = BytesMut::new();
+        data.extend_from_slice(&[0xD1]); // ROW token type
+        data.extend_from_slice(&[0x2A, 0x00, 0x00, 0x00]); // value = 42
+
+        let mut parser = TokenParser::new(data.freeze());
+        let token = parser.next_token_with_metadata(Some(&metadata)).unwrap().unwrap();
+
+        match token {
+            Token::Row(row) => {
+                assert_eq!(row.data.len(), 4);
+            }
+            _ => panic!("Expected Row token"),
+        }
+    }
+
+    #[test]
+    fn test_token_parser_row_without_metadata_fails() {
+        // Build ROW token
+        let mut data = BytesMut::new();
+        data.extend_from_slice(&[0xD1]); // ROW token type
+        data.extend_from_slice(&[0x2A, 0x00, 0x00, 0x00]); // value = 42
+
+        let mut parser = TokenParser::new(data.freeze());
+        let result = parser.next_token(); // No metadata provided
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_token_parser_peek() {
+        let data = Bytes::from_static(&[
+            0xFD, // DONE token type
+            0x10, 0x00, // status
+            0xC1, 0x00, // cur_cmd
+            0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // row_count
+        ]);
+
+        let parser = TokenParser::new(data);
+        assert_eq!(parser.peek_token_type(), Some(TokenType::Done));
+    }
+
+    #[test]
+    fn test_column_data_fixed_size() {
+        let col = ColumnData {
+            name: String::new(),
+            type_id: TypeId::Int4,
+            col_type: 0x38,
+            flags: 0,
+            user_type: 0,
+            type_info: TypeInfo::default(),
+        };
+        assert_eq!(col.fixed_size(), Some(4));
+
+        let col2 = ColumnData {
+            name: String::new(),
+            type_id: TypeId::NVarChar,
+            col_type: 0xE7,
+            flags: 0,
+            user_type: 0,
+            type_info: TypeInfo::default(),
+        };
+        assert_eq!(col2.fixed_size(), None);
     }
 }
