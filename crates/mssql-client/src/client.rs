@@ -1382,8 +1382,8 @@ impl Client<InTransaction> {
 
     /// Create a savepoint and return a handle for later rollback.
     ///
-    /// The returned `SavePoint` handle is lifetime-tied to the transaction,
-    /// ensuring at compile time that savepoints cannot outlive their transaction.
+    /// The returned `SavePoint` handle contains the validated savepoint name.
+    /// Use it with `rollback_to()` to partially undo transaction work.
     ///
     /// # Example
     ///
@@ -1396,7 +1396,7 @@ impl Client<InTransaction> {
     /// tx.rollback_to(&sp).await?;
     /// tx.commit().await?;
     /// ```
-    pub async fn save_point(&mut self, name: &str) -> Result<SavePoint<'_>> {
+    pub async fn save_point(&mut self, name: &str) -> Result<SavePoint> {
         validate_identifier(name)?;
         tracing::debug!(name = name, "creating savepoint");
 
@@ -1423,7 +1423,7 @@ impl Client<InTransaction> {
     /// tx.rollback_to(&sp).await?;  // Undo changes since checkpoint
     /// // Transaction is still active, savepoint is still valid
     /// ```
-    pub async fn rollback_to(&mut self, savepoint: &SavePoint<'_>) -> Result<()> {
+    pub async fn rollback_to(&mut self, savepoint: &SavePoint) -> Result<()> {
         tracing::debug!(name = savepoint.name(), "rolling back to savepoint");
 
         // Execute ROLLBACK TRANSACTION <name>
@@ -1440,7 +1440,7 @@ impl Client<InTransaction> {
     /// Note: SQL Server doesn't have explicit savepoint release, but this
     /// method is provided for API completeness. The savepoint is automatically
     /// released when the transaction commits or rolls back.
-    pub async fn release_savepoint(&mut self, savepoint: SavePoint<'_>) -> Result<()> {
+    pub async fn release_savepoint(&mut self, savepoint: SavePoint) -> Result<()> {
         tracing::debug!(name = savepoint.name(), "releasing savepoint");
 
         // SQL Server doesn't require explicit savepoint release

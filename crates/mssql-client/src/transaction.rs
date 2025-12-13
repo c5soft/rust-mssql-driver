@@ -3,8 +3,6 @@
 //! This module provides transaction isolation levels, savepoint support,
 //! and transaction abstractions for SQL Server.
 
-use std::marker::PhantomData;
-
 /// Transaction isolation level.
 ///
 /// SQL Server supports these isolation levels for transaction management.
@@ -79,7 +77,7 @@ impl IsolationLevel {
 /// let mut tx = client.begin_transaction().await?;
 ///
 /// tx.execute("INSERT INTO orders (customer_id) VALUES (@p1)", &[&42]).await?;
-/// let sp = tx.savepoint("before_items").await?;
+/// let sp = tx.save_point("before_items").await?;
 ///
 /// tx.execute("INSERT INTO items (order_id, product_id) VALUES (@p1, @p2)", &[&1, &100]).await?;
 ///
@@ -90,23 +88,17 @@ impl IsolationLevel {
 /// tx.commit().await?;
 /// ```
 #[derive(Debug, Clone)]
-pub struct SavePoint<'tx> {
+pub struct SavePoint {
     /// The validated savepoint name.
     pub(crate) name: String,
-    /// Lifetime tied to the transaction.
-    _tx: PhantomData<&'tx ()>,
 }
 
-impl<'tx> SavePoint<'tx> {
+impl SavePoint {
     /// Create a new savepoint with a validated name.
     ///
     /// This is called internally after name validation.
-    #[allow(dead_code)] // Used when savepoint creation is implemented
     pub(crate) fn new(name: String) -> Self {
-        Self {
-            name,
-            _tx: PhantomData,
-        }
+        Self { name }
     }
 
     /// Get the savepoint name.
@@ -122,7 +114,7 @@ impl<'tx> SavePoint<'tx> {
 /// with closure-based APIs or as a standalone type.
 pub struct Transaction<'a> {
     isolation_level: IsolationLevel,
-    _marker: PhantomData<&'a ()>,
+    _marker: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> Transaction<'a> {
@@ -131,7 +123,7 @@ impl<'a> Transaction<'a> {
     pub(crate) fn new() -> Self {
         Self {
             isolation_level: IsolationLevel::default(),
-            _marker: PhantomData,
+            _marker: std::marker::PhantomData,
         }
     }
 
@@ -140,7 +132,7 @@ impl<'a> Transaction<'a> {
     pub(crate) fn with_isolation_level(level: IsolationLevel) -> Self {
         Self {
             isolation_level: level,
-            _marker: PhantomData,
+            _marker: std::marker::PhantomData,
         }
     }
 
@@ -177,6 +169,8 @@ mod tests {
     fn test_savepoint_name() {
         let sp = SavePoint::new("my_savepoint".to_string());
         assert_eq!(sp.name(), "my_savepoint");
+        // SavePoint now has no lifetime parameter
+        assert_eq!(sp.name, "my_savepoint");
     }
 
     #[test]
