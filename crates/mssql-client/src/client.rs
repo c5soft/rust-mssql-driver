@@ -18,6 +18,8 @@ use tokio::time::timeout;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
+#[cfg(feature = "otel")]
+use crate::instrumentation::InstrumentationContext;
 use crate::state::{ConnectionState, Disconnected, InTransaction, Ready};
 use crate::statement_cache::StatementCache;
 use crate::stream::QueryStream;
@@ -39,6 +41,9 @@ pub struct Client<S: ConnectionState> {
     current_database: Option<String>,
     /// Prepared statement cache for query optimization
     statement_cache: StatementCache,
+    /// OpenTelemetry instrumentation context (when otel feature is enabled)
+    #[cfg(feature = "otel")]
+    instrumentation: InstrumentationContext,
 }
 
 /// Internal connection handle wrapping the actual connection.
@@ -180,8 +185,11 @@ impl Client<Disconnected> {
             _state: PhantomData,
             connection: Some(ConnectionHandle::Tls(connection)),
             server_version,
-            current_database,
+            current_database: current_database.clone(),
             statement_cache: StatementCache::with_default_size(),
+            #[cfg(feature = "otel")]
+            instrumentation: InstrumentationContext::new(config.host.clone(), config.port)
+                .with_database(current_database.unwrap_or_default()),
         })
     }
 
@@ -280,8 +288,11 @@ impl Client<Disconnected> {
             _state: PhantomData,
             connection: Some(ConnectionHandle::Tls(connection)),
             server_version,
-            current_database,
+            current_database: current_database.clone(),
             statement_cache: StatementCache::with_default_size(),
+            #[cfg(feature = "otel")]
+            instrumentation: InstrumentationContext::new(config.host.clone(), config.port)
+                .with_database(current_database.unwrap_or_default()),
         })
     }
 
@@ -1176,19 +1187,38 @@ impl Client<Ready> {
     ) -> Result<QueryStream<'a>> {
         tracing::debug!(sql = sql, params_count = params.len(), "executing query");
 
-        if params.is_empty() {
-            // Simple query without parameters - use SQL batch
-            self.send_sql_batch(sql).await?;
-        } else {
-            // Parameterized query - use sp_executesql via RPC
-            let rpc_params = Self::convert_params(params)?;
-            let rpc = RpcRequest::execute_sql(sql, rpc_params);
-            self.send_rpc(&rpc).await?;
+        #[cfg(feature = "otel")]
+        let instrumentation = self.instrumentation.clone();
+        #[cfg(feature = "otel")]
+        let mut span = instrumentation.query_span(sql);
+
+        let result = async {
+            if params.is_empty() {
+                // Simple query without parameters - use SQL batch
+                self.send_sql_batch(sql).await?;
+            } else {
+                // Parameterized query - use sp_executesql via RPC
+                let rpc_params = Self::convert_params(params)?;
+                let rpc = RpcRequest::execute_sql(sql, rpc_params);
+                self.send_rpc(&rpc).await?;
+            }
+
+            // Read complete response including columns and rows
+            self.read_query_response().await
+        }
+        .await;
+
+        #[cfg(feature = "otel")]
+        match &result {
+            Ok(_) => InstrumentationContext::record_success(&mut span, None),
+            Err(e) => InstrumentationContext::record_error(&mut span, e),
         }
 
-        // Read complete response including columns and rows
-        let (columns, rows) = self.read_query_response().await?;
+        // Drop the span before returning
+        #[cfg(feature = "otel")]
+        drop(span);
 
+        let (columns, rows) = result?;
         Ok(QueryStream::new(columns, rows))
     }
 
@@ -1206,20 +1236,38 @@ impl Client<Ready> {
             "executing statement"
         );
 
-        if params.is_empty() {
-            // Simple statement without parameters - use SQL batch
-            self.send_sql_batch(sql).await?;
-        } else {
-            // Parameterized statement - use sp_executesql via RPC
-            let rpc_params = Self::convert_params(params)?;
-            let rpc = RpcRequest::execute_sql(sql, rpc_params);
-            self.send_rpc(&rpc).await?;
+        #[cfg(feature = "otel")]
+        let instrumentation = self.instrumentation.clone();
+        #[cfg(feature = "otel")]
+        let mut span = instrumentation.query_span(sql);
+
+        let result = async {
+            if params.is_empty() {
+                // Simple statement without parameters - use SQL batch
+                self.send_sql_batch(sql).await?;
+            } else {
+                // Parameterized statement - use sp_executesql via RPC
+                let rpc_params = Self::convert_params(params)?;
+                let rpc = RpcRequest::execute_sql(sql, rpc_params);
+                self.send_rpc(&rpc).await?;
+            }
+
+            // Read response and get row count
+            self.read_execute_result().await
+        }
+        .await;
+
+        #[cfg(feature = "otel")]
+        match &result {
+            Ok(rows) => InstrumentationContext::record_success(&mut span, Some(*rows)),
+            Err(e) => InstrumentationContext::record_error(&mut span, e),
         }
 
-        // Read response and get row count
-        let rows_affected = self.read_execute_result().await?;
+        // Drop the span before returning
+        #[cfg(feature = "otel")]
+        drop(span);
 
-        Ok(rows_affected)
+        result
     }
 
     /// Begin a transaction.
@@ -1228,9 +1276,29 @@ impl Client<Ready> {
     pub async fn begin_transaction(mut self) -> Result<Client<InTransaction>> {
         tracing::debug!("beginning transaction");
 
+        #[cfg(feature = "otel")]
+        let instrumentation = self.instrumentation.clone();
+        #[cfg(feature = "otel")]
+        let mut span = instrumentation.transaction_span("BEGIN");
+
         // Execute BEGIN TRANSACTION
-        self.send_sql_batch("BEGIN TRANSACTION").await?;
-        self.read_execute_result().await?;
+        let result = async {
+            self.send_sql_batch("BEGIN TRANSACTION").await?;
+            self.read_execute_result().await
+        }
+        .await;
+
+        #[cfg(feature = "otel")]
+        match &result {
+            Ok(_) => InstrumentationContext::record_success(&mut span, None),
+            Err(e) => InstrumentationContext::record_error(&mut span, e),
+        }
+
+        // Drop the span before moving instrumentation
+        #[cfg(feature = "otel")]
+        drop(span);
+
+        result?;
 
         Ok(Client {
             config: self.config,
@@ -1239,6 +1307,8 @@ impl Client<Ready> {
             server_version: self.server_version,
             current_database: self.current_database,
             statement_cache: self.statement_cache,
+            #[cfg(feature = "otel")]
+            instrumentation: self.instrumentation,
         })
     }
 
@@ -1294,19 +1364,38 @@ impl Client<InTransaction> {
     ) -> Result<QueryStream<'a>> {
         tracing::debug!(sql = sql, params_count = params.len(), "executing query in transaction");
 
-        if params.is_empty() {
-            // Simple query without parameters - use SQL batch
-            self.send_sql_batch(sql).await?;
-        } else {
-            // Parameterized query - use sp_executesql via RPC
-            let rpc_params = Self::convert_params(params)?;
-            let rpc = RpcRequest::execute_sql(sql, rpc_params);
-            self.send_rpc(&rpc).await?;
+        #[cfg(feature = "otel")]
+        let instrumentation = self.instrumentation.clone();
+        #[cfg(feature = "otel")]
+        let mut span = instrumentation.query_span(sql);
+
+        let result = async {
+            if params.is_empty() {
+                // Simple query without parameters - use SQL batch
+                self.send_sql_batch(sql).await?;
+            } else {
+                // Parameterized query - use sp_executesql via RPC
+                let rpc_params = Self::convert_params(params)?;
+                let rpc = RpcRequest::execute_sql(sql, rpc_params);
+                self.send_rpc(&rpc).await?;
+            }
+
+            // Read complete response including columns and rows
+            self.read_query_response().await
+        }
+        .await;
+
+        #[cfg(feature = "otel")]
+        match &result {
+            Ok(_) => InstrumentationContext::record_success(&mut span, None),
+            Err(e) => InstrumentationContext::record_error(&mut span, e),
         }
 
-        // Read complete response including columns and rows
-        let (columns, rows) = self.read_query_response().await?;
+        // Drop the span before returning
+        #[cfg(feature = "otel")]
+        drop(span);
 
+        let (columns, rows) = result?;
         Ok(QueryStream::new(columns, rows))
     }
 
@@ -1324,20 +1413,38 @@ impl Client<InTransaction> {
             "executing statement in transaction"
         );
 
-        if params.is_empty() {
-            // Simple statement without parameters - use SQL batch
-            self.send_sql_batch(sql).await?;
-        } else {
-            // Parameterized statement - use sp_executesql via RPC
-            let rpc_params = Self::convert_params(params)?;
-            let rpc = RpcRequest::execute_sql(sql, rpc_params);
-            self.send_rpc(&rpc).await?;
+        #[cfg(feature = "otel")]
+        let instrumentation = self.instrumentation.clone();
+        #[cfg(feature = "otel")]
+        let mut span = instrumentation.query_span(sql);
+
+        let result = async {
+            if params.is_empty() {
+                // Simple statement without parameters - use SQL batch
+                self.send_sql_batch(sql).await?;
+            } else {
+                // Parameterized statement - use sp_executesql via RPC
+                let rpc_params = Self::convert_params(params)?;
+                let rpc = RpcRequest::execute_sql(sql, rpc_params);
+                self.send_rpc(&rpc).await?;
+            }
+
+            // Read response and get row count
+            self.read_execute_result().await
+        }
+        .await;
+
+        #[cfg(feature = "otel")]
+        match &result {
+            Ok(rows) => InstrumentationContext::record_success(&mut span, Some(*rows)),
+            Err(e) => InstrumentationContext::record_error(&mut span, e),
         }
 
-        // Read response and get row count
-        let rows_affected = self.read_execute_result().await?;
+        // Drop the span before returning
+        #[cfg(feature = "otel")]
+        drop(span);
 
-        Ok(rows_affected)
+        result
     }
 
     /// Commit the transaction.
@@ -1346,9 +1453,29 @@ impl Client<InTransaction> {
     pub async fn commit(mut self) -> Result<Client<Ready>> {
         tracing::debug!("committing transaction");
 
+        #[cfg(feature = "otel")]
+        let instrumentation = self.instrumentation.clone();
+        #[cfg(feature = "otel")]
+        let mut span = instrumentation.transaction_span("COMMIT");
+
         // Execute COMMIT TRANSACTION
-        self.send_sql_batch("COMMIT TRANSACTION").await?;
-        self.read_execute_result().await?;
+        let result = async {
+            self.send_sql_batch("COMMIT TRANSACTION").await?;
+            self.read_execute_result().await
+        }
+        .await;
+
+        #[cfg(feature = "otel")]
+        match &result {
+            Ok(_) => InstrumentationContext::record_success(&mut span, None),
+            Err(e) => InstrumentationContext::record_error(&mut span, e),
+        }
+
+        // Drop the span before moving instrumentation
+        #[cfg(feature = "otel")]
+        drop(span);
+
+        result?;
 
         Ok(Client {
             config: self.config,
@@ -1357,6 +1484,8 @@ impl Client<InTransaction> {
             server_version: self.server_version,
             current_database: self.current_database,
             statement_cache: self.statement_cache,
+            #[cfg(feature = "otel")]
+            instrumentation: self.instrumentation,
         })
     }
 
@@ -1366,9 +1495,29 @@ impl Client<InTransaction> {
     pub async fn rollback(mut self) -> Result<Client<Ready>> {
         tracing::debug!("rolling back transaction");
 
+        #[cfg(feature = "otel")]
+        let instrumentation = self.instrumentation.clone();
+        #[cfg(feature = "otel")]
+        let mut span = instrumentation.transaction_span("ROLLBACK");
+
         // Execute ROLLBACK TRANSACTION
-        self.send_sql_batch("ROLLBACK TRANSACTION").await?;
-        self.read_execute_result().await?;
+        let result = async {
+            self.send_sql_batch("ROLLBACK TRANSACTION").await?;
+            self.read_execute_result().await
+        }
+        .await;
+
+        #[cfg(feature = "otel")]
+        match &result {
+            Ok(_) => InstrumentationContext::record_success(&mut span, None),
+            Err(e) => InstrumentationContext::record_error(&mut span, e),
+        }
+
+        // Drop the span before moving instrumentation
+        #[cfg(feature = "otel")]
+        drop(span);
+
+        result?;
 
         Ok(Client {
             config: self.config,
@@ -1377,6 +1526,8 @@ impl Client<InTransaction> {
             server_version: self.server_version,
             current_database: self.current_database,
             statement_cache: self.statement_cache,
+            #[cfg(feature = "otel")]
+            instrumentation: self.instrumentation,
         })
     }
 
