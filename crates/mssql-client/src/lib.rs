@@ -70,6 +70,7 @@
 #![warn(missing_docs)]
 #![deny(unsafe_code)]
 
+pub mod blob;
 pub mod bulk;
 pub mod client;
 pub mod config;
