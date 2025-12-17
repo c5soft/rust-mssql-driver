@@ -6,7 +6,49 @@
 //! - String concatenation of values
 //! - Temporary tables
 //!
-//! ## Usage
+//! ## Current Status: Not Yet Implemented
+//!
+//! **Note:** TVP support is planned but not yet fully implemented. The types in this
+//! module provide the foundation for TVP support, but attempting to use `TvpValue`
+//! as a query parameter will return an error.
+//!
+//! TVP encoding requires TDS-specific binary encoding (type_id 0xF3) which involves:
+//! 1. Adding a `SqlValue::Tvp` variant to the type system
+//! 2. TVP parameter metadata encoding in RPC requests
+//! 3. TVP row data encoding per MS-TDS specification
+//!
+//! ### Workarounds
+//!
+//! Until TVP is fully implemented, consider these alternatives:
+//!
+//! **1. Use a temporary table:**
+//! ```sql
+//! CREATE TABLE #UserIds (UserId INT);
+//! INSERT INTO #UserIds VALUES (1), (2), (3);
+//! SELECT * FROM Users WHERE UserId IN (SELECT UserId FROM #UserIds);
+//! ```
+//!
+//! **2. Use XML parameter:**
+//! ```rust,ignore
+//! let xml = "<ids><id>1</id><id>2</id><id>3</id></ids>";
+//! client.execute(
+//!     "SELECT * FROM Users WHERE UserId IN (SELECT x.value('.', 'INT') FROM @xml.nodes('/ids/id') AS T(x))",
+//!     &[&xml],
+//! ).await?;
+//! ```
+//!
+//! **3. Use JSON parameter (SQL Server 2016+):**
+//! ```rust,ignore
+//! let json = "[1, 2, 3]";
+//! client.execute(
+//!     "SELECT * FROM Users WHERE UserId IN (SELECT value FROM OPENJSON(@json))",
+//!     &[&json],
+//! ).await?;
+//! ```
+//!
+//! ## Planned Usage (Future)
+//!
+//! When TVP support is complete, the API will work as follows:
 //!
 //! First, create a table type in SQL Server:
 //!
@@ -201,22 +243,21 @@ impl TvpValue {
 
 impl ToSql for TvpValue {
     fn to_sql(&self) -> Result<SqlValue, TypeError> {
-        // For now, TVP values are represented as a special binary type
-        // that will be handled specially during parameter encoding.
-        // The actual encoding will be done in the RPC layer.
-
-        // We serialize the TVP metadata and rows into a structured format
-        // that can be later decoded by the RPC encoder.
+        // TVP encoding requires TDS-specific binary encoding (type_id 0xF3)
+        // that is not yet implemented. Full TVP support requires:
         //
-        // Format: JSON-like structure (for now, will be optimized)
-        // This is a placeholder - real implementation will use TDS-specific encoding
-        let serialized = format!(
-            "TVP:{}:{}",
-            self.type_name,
-            self.rows.len()
-        );
-
-        Ok(SqlValue::String(serialized))
+        // 1. SqlValue::Tvp variant in mssql-types
+        // 2. TVP parameter metadata encoding in RPC requests
+        // 3. TVP row data encoding per MS-TDS specification
+        //
+        // This is tracked as a known limitation. For now, return an error
+        // rather than producing invalid SQL that would fail at runtime.
+        //
+        // Workaround: Use a temp table or XML parameter instead of TVP.
+        Err(TypeError::UnsupportedConversion {
+            from: "TvpValue".to_string(),
+            to: "SqlValue",
+        })
     }
 
     fn sql_type(&self) -> &'static str {
