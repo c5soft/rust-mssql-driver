@@ -80,8 +80,8 @@ All crates inherit this version automatically.
 ### Added
 - ...
 
-[Unreleased]: https://github.com/rust-mssql-driver/rust-mssql-driver/compare/vX.Y.Z...HEAD
-[X.Y.Z]: https://github.com/rust-mssql-driver/rust-mssql-driver/compare/vX.Y-1.Z...vX.Y.Z
+[Unreleased]: https://github.com/praxiomlabs/rust-mssql-driver/compare/vX.Y.Z...HEAD
+[X.Y.Z]: https://github.com/praxiomlabs/rust-mssql-driver/compare/vX.Y-1.Z...vX.Y.Z
 ```
 
 ### 3. Create Release Commit

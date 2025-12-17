@@ -442,7 +442,7 @@ RUST_LOG=mssql_client=trace,tds_protocol=trace cargo run
 
 If you can't resolve your issue:
 
-1. **Check existing issues:** [GitHub Issues](https://github.com/rust-mssql-driver/rust-mssql-driver/issues)
+1. **Check existing issues:** [GitHub Issues](https://github.com/praxiomlabs/rust-mssql-driver/issues)
 
 2. **Gather diagnostic information:**
    - Rust version (`rustc --version`)

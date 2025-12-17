@@ -323,7 +323,7 @@ match tokio::time::timeout(Duration::from_secs(5), client.query(sql, &[])).await
 
 If you encounter a limitation not documented here, please:
 
-1. Check the [GitHub Issues](https://github.com/rust-mssql-driver/rust-mssql-driver/issues) for existing reports
+1. Check the [GitHub Issues](https://github.com/praxiomlabs/rust-mssql-driver/issues) for existing reports
 2. Open a new issue with:
    - SQL Server version
    - Driver version

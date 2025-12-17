@@ -22,7 +22,7 @@ This project follows the [Rust Code of Conduct](https://www.rust-lang.org/polici
 
 1. Fork the repository
 2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/rust-mssql-driver.git`
-3. Add upstream remote: `git remote add upstream https://github.com/rust-mssql-driver/rust-mssql-driver.git`
+3. Add upstream remote: `git remote add upstream https://github.com/praxiomlabs/rust-mssql-driver.git`
 4. Create a feature branch: `git checkout -b feature/your-feature-name`
 
 ## Development Setup
@@ -32,6 +32,22 @@ This project follows the [Rust Code of Conduct](https://www.rust-lang.org/polici
 - Rust 1.85+ (2024 Edition)
 - Docker (for integration tests)
 - SQL Server instance (or use Docker)
+
+#### Platform-Specific Requirements
+
+**Linux (with integrated authentication):**
+```bash
+# Debian/Ubuntu
+sudo apt-get install libkrb5-dev
+
+# RHEL/Fedora
+sudo dnf install krb5-devel
+```
+
+The `integrated-auth` feature (Kerberos/SPNEGO) requires `libkrb5-dev` headers and is **Linux-only**.
+On macOS and Windows, use default features (omit `--all-features`).
+
+The Justfile recipes use `--all-features` by default and require Linux with Kerberos headers installed. For cross-platform development without integrated auth, run cargo commands directly without `--all-features`.
 
 ### Building
 
