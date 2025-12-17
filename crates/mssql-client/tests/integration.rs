@@ -1,0 +1,1379 @@
+//! Live SQL Server integration tests.
+//!
+//! These tests require a running SQL Server instance. They are ignored by default
+//! and can be run with:
+//!
+//! ```bash
+//! # Set connection details via environment variables
+//! export MSSQL_HOST=localhost
+//! export MSSQL_USER=sa
+//! export MSSQL_PASSWORD=YourPassword
+//! export MSSQL_ENCRYPT=false  # For development servers without TLS
+//!
+//! # Run integration tests
+//! cargo test -p mssql-client --test integration -- --ignored
+//! ```
+//!
+//! For CI/CD, use Docker:
+//! ```bash
+//! docker run -e 'ACCEPT_EULA=Y' -e 'SA_PASSWORD=YourStrong@Passw0rd' \
+//!     -p 1433:1433 mcr.microsoft.com/mssql/server:2022-latest
+//! ```
+
+use mssql_client::{Client, Config};
+
+/// Helper to get test configuration from environment variables.
+fn get_test_config() -> Option<Config> {
+    let host = std::env::var("MSSQL_HOST").ok()?;
+    let user = std::env::var("MSSQL_USER").unwrap_or_else(|_| "sa".into());
+    let password = std::env::var("MSSQL_PASSWORD").unwrap_or_else(|_| "MyStrongPassw0rd".into());
+    let database = std::env::var("MSSQL_DATABASE").unwrap_or_else(|_| "master".into());
+    let encrypt = std::env::var("MSSQL_ENCRYPT").unwrap_or_else(|_| "false".into());
+
+    let conn_str = format!(
+        "Server={};Database={};User Id={};Password={};TrustServerCertificate=true;Encrypt={}",
+        host, database, user, password, encrypt
+    );
+
+    Config::from_connection_string(&conn_str).ok()
+}
+
+// =============================================================================
+// Connection Tests
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_basic_connection() {
+    let config = get_test_config().expect("SQL Server config required");
+
+    let client = Client::connect(config).await.expect("Failed to connect");
+    client.close().await.expect("Failed to close connection");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_connection_with_invalid_credentials() {
+    let host = std::env::var("MSSQL_HOST").unwrap_or_else(|_| "localhost".into());
+    let encrypt = std::env::var("MSSQL_ENCRYPT").unwrap_or_else(|_| "false".into());
+
+    let conn_str = format!(
+        "Server={};Database=master;User Id=invalid_user;Password=wrong_password;\
+         TrustServerCertificate=true;Encrypt={}",
+        host, encrypt
+    );
+
+    let config = Config::from_connection_string(&conn_str).expect("Config should parse");
+    let result = Client::connect(config).await;
+
+    assert!(result.is_err(), "Should fail with invalid credentials");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_connection_to_nonexistent_database() {
+    let host = std::env::var("MSSQL_HOST").unwrap_or_else(|_| "localhost".into());
+    let user = std::env::var("MSSQL_USER").unwrap_or_else(|_| "sa".into());
+    let password = std::env::var("MSSQL_PASSWORD").unwrap_or_else(|_| "MyStrongPassw0rd".into());
+    let encrypt = std::env::var("MSSQL_ENCRYPT").unwrap_or_else(|_| "false".into());
+
+    let conn_str = format!(
+        "Server={};Database=nonexistent_db_12345;User Id={};Password={};\
+         TrustServerCertificate=true;Encrypt={}",
+        host, user, password, encrypt
+    );
+
+    let config = Config::from_connection_string(&conn_str).expect("Config should parse");
+    let result = Client::connect(config).await;
+
+    // Should either fail or connect to master (depending on server config)
+    // Either way, the connection attempt should not panic
+    if let Err(e) = result {
+        // Expected: database doesn't exist error
+        println!("Expected error: {:?}", e);
+    }
+}
+
+// =============================================================================
+// Query Tests
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_simple_select() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    let rows = client.query("SELECT 1 AS value", &[]).await.expect("Query failed");
+
+    let mut count = 0;
+    for result in rows {
+        let row = result.expect("Row should be valid");
+        let value: i32 = row.get(0).expect("Should get value");
+        assert_eq!(value, 1);
+        count += 1;
+    }
+    assert_eq!(count, 1);
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_select_multiple_columns() {
+    use rust_decimal::Decimal;
+    use std::str::FromStr;
+
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Test with DECIMAL type (now properly parsed)
+    let rows = client
+        .query("SELECT 1 AS a, 'hello' AS b, CAST(3.14 AS DECIMAL(10,2)) AS c", &[])
+        .await
+        .expect("Query failed");
+
+    for result in rows {
+        let row = result.expect("Row should be valid");
+        let a: i32 = row.get(0).expect("Should get a");
+        let b: String = row.get(1).expect("Should get b");
+        let c: Decimal = row.get(2).expect("Should get c");
+
+        assert_eq!(a, 1);
+        assert_eq!(b, "hello");
+        assert_eq!(c, Decimal::from_str("3.14").unwrap());
+    }
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_select_multiple_rows() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    let rows = client
+        .query(
+            "SELECT value FROM (VALUES (1), (2), (3), (4), (5)) AS t(value)",
+            &[],
+        )
+        .await
+        .expect("Query failed");
+
+    let values: Vec<i32> = rows
+        .filter_map(|r| r.ok())
+        .map(|row| row.get(0).unwrap())
+        .collect();
+
+    assert_eq!(values, vec![1, 2, 3, 4, 5]);
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_select_null_values() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    let rows = client
+        .query("SELECT NULL AS nullable_col", &[])
+        .await
+        .expect("Query failed");
+
+    for result in rows {
+        let row = result.expect("Row should be valid");
+        let value: Option<i32> = row.get(0).expect("Should get nullable");
+        assert!(value.is_none());
+    }
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_server_version() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    let rows = client
+        .query("SELECT @@VERSION AS version", &[])
+        .await
+        .expect("Query failed");
+
+    for result in rows {
+        let row = result.expect("Row should be valid");
+        let version: String = row.get(0).expect("Should get version");
+        assert!(version.contains("Microsoft SQL Server"));
+    }
+
+    client.close().await.expect("Failed to close");
+}
+
+// =============================================================================
+// Parameterized Query Tests
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_parameterized_query_int() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    let param = 42i32;
+    let rows = client
+        .query("SELECT @p1 AS value", &[&param])
+        .await
+        .expect("Query failed");
+
+    for result in rows {
+        let row = result.expect("Row should be valid");
+        let value: i32 = row.get(0).expect("Should get value");
+        assert_eq!(value, 42);
+    }
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_parameterized_query_string() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    let param = "hello world";
+    let rows = client
+        .query("SELECT @p1 AS value", &[&param])
+        .await
+        .expect("Query failed");
+
+    for result in rows {
+        let row = result.expect("Row should be valid");
+        let value: String = row.get(0).expect("Should get value");
+        assert_eq!(value, "hello world");
+    }
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_parameterized_query_multiple_params() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    let name = "Alice";
+    let age = 30i32;
+    let rows = client
+        .query("SELECT @p1 AS name, @p2 AS age", &[&name, &age])
+        .await
+        .expect("Query failed");
+
+    for result in rows {
+        let row = result.expect("Row should be valid");
+        let n: String = row.get(0).expect("Should get name");
+        let a: i32 = row.get(1).expect("Should get age");
+        assert_eq!(n, "Alice");
+        assert_eq!(a, 30);
+    }
+
+    client.close().await.expect("Failed to close");
+}
+
+// =============================================================================
+// Execute (Non-Query) Tests
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_execute_returns_row_count() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Create a temp table, insert some rows, then count them
+    client
+        .execute(
+            "CREATE TABLE #test_execute (id INT, name NVARCHAR(50))",
+            &[],
+        )
+        .await
+        .expect("Create failed");
+
+    let count = client
+        .execute(
+            "INSERT INTO #test_execute VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie')",
+            &[],
+        )
+        .await
+        .expect("Insert failed");
+
+    assert_eq!(count, 3, "Should have inserted 3 rows");
+
+    client.close().await.expect("Failed to close");
+}
+
+// =============================================================================
+// Error Handling Tests
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_syntax_error() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    let result = client.query("SELEKT * FROM nowhere", &[]).await;
+    assert!(result.is_err(), "Should fail with syntax error");
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_table_not_found() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    let result = client
+        .query("SELECT * FROM nonexistent_table_xyz", &[])
+        .await;
+    assert!(result.is_err(), "Should fail with table not found");
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_division_by_zero() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    let result = client.query("SELECT 1/0", &[]).await;
+    // Division by zero in SQL Server depends on ANSI_WARNINGS setting
+    // It may return NULL or error
+    match result {
+        Ok(rows) => {
+            // If it succeeded, the value should be NULL
+            for r in rows {
+                if let Ok(row) = r {
+                    let val: Option<i32> = row.get(0).ok().flatten();
+                    println!("Division by zero returned: {:?}", val);
+                }
+            }
+        }
+        Err(e) => {
+            println!("Division by zero error: {:?}", e);
+        }
+    }
+
+    client.close().await.expect("Failed to close");
+}
+
+// =============================================================================
+// Data Type Tests
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_data_type_bigint() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    let rows = client
+        .query("SELECT CAST(9223372036854775807 AS BIGINT) AS value", &[])
+        .await
+        .expect("Query failed");
+
+    for result in rows {
+        let row = result.expect("Row should be valid");
+        let value: i64 = row.get(0).expect("Should get bigint");
+        assert_eq!(value, i64::MAX);
+    }
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_data_type_float() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    let rows = client
+        .query("SELECT CAST(3.14159265358979 AS FLOAT) AS value", &[])
+        .await
+        .expect("Query failed");
+
+    for result in rows {
+        let row = result.expect("Row should be valid");
+        let value: f64 = row.get(0).expect("Should get float");
+        assert!((value - std::f64::consts::PI).abs() < 0.0000001);
+    }
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_data_type_bit() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    let rows = client
+        .query("SELECT CAST(1 AS BIT) AS t, CAST(0 AS BIT) AS f", &[])
+        .await
+        .expect("Query failed");
+
+    for result in rows {
+        let row = result.expect("Row should be valid");
+        let t: bool = row.get(0).expect("Should get true");
+        let f: bool = row.get(1).expect("Should get false");
+        assert!(t);
+        assert!(!f);
+    }
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_data_type_datetime() {
+    use chrono::{Datelike, NaiveDateTime, Timelike};
+
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Test DATETIME parsing (returns NaiveDateTime via SqlValue::DateTime)
+    let rows = client
+        .query("SELECT GETDATE() AS now", &[])
+        .await
+        .expect("Query failed");
+
+    for result in rows {
+        let row = result.expect("Row should be valid");
+        let now: NaiveDateTime = row.get(0).expect("Should get datetime");
+        // Just verify it's a reasonable year (not a parse error)
+        assert!(now.year() >= 2024 && now.year() <= 2100, "Year should be reasonable");
+    }
+
+    // Also test a specific datetime value
+    let rows = client
+        .query("SELECT CAST('2024-06-15 14:30:45.123' AS DATETIME) AS dt", &[])
+        .await
+        .expect("Query failed");
+
+    for result in rows {
+        let row = result.expect("Row should be valid");
+        let dt: NaiveDateTime = row.get(0).expect("Should get datetime");
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 6);
+        assert_eq!(dt.day(), 15);
+        assert_eq!(dt.hour(), 14);
+        assert_eq!(dt.minute(), 30);
+        // Seconds may have slight rounding due to DATETIME precision (1/300th second)
+        assert!(dt.second() == 45 || dt.second() == 44);
+    }
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_unicode_strings() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    let rows = client
+        .query("SELECT N'Hello, \u{4e16}\u{754c}!' AS greeting", &[])  // Hello, World! in Chinese
+        .await
+        .expect("Query failed");
+
+    for result in rows {
+        let row = result.expect("Row should be valid");
+        let greeting: String = row.get(0).expect("Should get greeting");
+        assert_eq!(greeting, "Hello, \u{4e16}\u{754c}!");
+    }
+
+    client.close().await.expect("Failed to close");
+}
+
+// =============================================================================
+// Multiple Statements Tests
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_multiple_queries_same_connection() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Execute multiple queries on the same connection
+    for i in 1..=5 {
+        let rows = client
+            .query(&format!("SELECT {} AS iteration", i), &[])
+            .await
+            .expect("Query failed");
+
+        for result in rows {
+            let row = result.expect("Row should be valid");
+            let value: i32 = row.get(0).expect("Should get value");
+            assert_eq!(value, i);
+        }
+    }
+
+    client.close().await.expect("Failed to close");
+}
+
+// =============================================================================
+// Temp Table Tests
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_temp_table_operations() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Create temp table
+    client
+        .execute(
+            "CREATE TABLE #test_temp (id INT PRIMARY KEY, name NVARCHAR(100))",
+            &[],
+        )
+        .await
+        .expect("Create table failed");
+
+    // Insert data
+    client
+        .execute("INSERT INTO #test_temp VALUES (1, 'Alice')", &[])
+        .await
+        .expect("Insert failed");
+
+    client
+        .execute("INSERT INTO #test_temp VALUES (2, 'Bob')", &[])
+        .await
+        .expect("Insert failed");
+
+    // Query data
+    let rows = client
+        .query("SELECT id, name FROM #test_temp ORDER BY id", &[])
+        .await
+        .expect("Query failed");
+
+    let results: Vec<(i32, String)> = rows
+        .filter_map(|r| r.ok())
+        .map(|row| (row.get(0).unwrap(), row.get(1).unwrap()))
+        .collect();
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0], (1, "Alice".to_string()));
+    assert_eq!(results[1], (2, "Bob".to_string()));
+
+    // Update data
+    let updated = client
+        .execute("UPDATE #test_temp SET name = 'Alicia' WHERE id = 1", &[])
+        .await
+        .expect("Update failed");
+    assert_eq!(updated, 1);
+
+    // Delete data
+    let deleted = client
+        .execute("DELETE FROM #test_temp WHERE id = 2", &[])
+        .await
+        .expect("Delete failed");
+    assert_eq!(deleted, 1);
+
+    // Verify final state
+    let rows = client
+        .query("SELECT COUNT(*) FROM #test_temp", &[])
+        .await
+        .expect("Count failed");
+
+    for result in rows {
+        let row = result.expect("Row should be valid");
+        let count: i32 = row.get(0).expect("Should get count");
+        assert_eq!(count, 1);
+    }
+
+    client.close().await.expect("Failed to close");
+}
+
+// =============================================================================
+// Large Data Tests
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_large_result_set() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Generate 1000 rows using a recursive CTE
+    let rows = client
+        .query(
+            "WITH nums AS (
+                SELECT 1 AS n
+                UNION ALL
+                SELECT n + 1 FROM nums WHERE n < 1000
+            )
+            SELECT n FROM nums
+            OPTION (MAXRECURSION 1000)",
+            &[],
+        )
+        .await
+        .expect("Query failed");
+
+    let count = rows.filter_map(|r| r.ok()).count();
+    assert_eq!(count, 1000);
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_large_string() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Create a string of 8000 characters (max for VARCHAR)
+    let large_string = "X".repeat(8000);
+    let rows = client
+        .query(
+            &format!("SELECT '{}' AS large_value", large_string),
+            &[],
+        )
+        .await
+        .expect("Query failed");
+
+    for result in rows {
+        let row = result.expect("Row should be valid");
+        let value: String = row.get(0).expect("Should get value");
+        assert_eq!(value.len(), 8000);
+    }
+
+    client.close().await.expect("Failed to close");
+}
+
+// =============================================================================
+// Transaction Tests (TEST-018)
+//
+// NOTE: These tests currently fail with error 3989:
+// "New request is not allowed to start because it should come with valid transaction descriptor."
+//
+// This is because the ALL_HEADERS section in SQL batch and RPC requests needs to include
+// the transaction descriptor returned by the server in the BeginTransaction EnvChange token.
+// This requires:
+// 1. Extracting transaction descriptor from BeginTransaction EnvChange
+// 2. Storing it in Client<InTransaction> state
+// 3. Passing it in subsequent SQL batch/RPC ALL_HEADERS
+//
+// Until this is implemented, transaction support is incomplete.
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "Requires transaction descriptor support - see TEST-018"]
+async fn test_transaction_commit() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Create temp table for test
+    client
+        .execute("CREATE TABLE #tx_test (id INT, value NVARCHAR(50))", &[])
+        .await
+        .expect("Create table failed");
+
+    // Get the client back after the initial setup
+    let tx = client.begin_transaction().await.expect("Begin failed");
+
+    // Insert data within transaction
+    let mut tx = tx;
+    tx.execute("INSERT INTO #tx_test VALUES (1, 'committed')", &[])
+        .await
+        .expect("Insert failed");
+
+    // Commit the transaction
+    let mut client = tx.commit().await.expect("Commit failed");
+
+    // Verify data persists after commit
+    let rows = client
+        .query("SELECT value FROM #tx_test WHERE id = 1", &[])
+        .await
+        .expect("Query failed");
+
+    let values: Vec<String> = rows
+        .filter_map(|r| r.ok())
+        .map(|row| row.get(0).unwrap())
+        .collect();
+
+    assert_eq!(values.len(), 1);
+    assert_eq!(values[0], "committed");
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires transaction descriptor support - see TEST-018"]
+async fn test_transaction_rollback() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Create temp table with initial data
+    client
+        .execute("CREATE TABLE #tx_rollback (id INT, value NVARCHAR(50))", &[])
+        .await
+        .expect("Create table failed");
+
+    client
+        .execute("INSERT INTO #tx_rollback VALUES (1, 'original')", &[])
+        .await
+        .expect("Insert failed");
+
+    // Begin transaction and modify data
+    let mut tx = client.begin_transaction().await.expect("Begin failed");
+
+    tx.execute("UPDATE #tx_rollback SET value = 'modified' WHERE id = 1", &[])
+        .await
+        .expect("Update failed");
+
+    // Rollback the transaction
+    let mut client = tx.rollback().await.expect("Rollback failed");
+
+    // Verify data is unchanged after rollback
+    let rows = client
+        .query("SELECT value FROM #tx_rollback WHERE id = 1", &[])
+        .await
+        .expect("Query failed");
+
+    let values: Vec<String> = rows
+        .filter_map(|r| r.ok())
+        .map(|row| row.get(0).unwrap())
+        .collect();
+
+    assert_eq!(values.len(), 1);
+    assert_eq!(values[0], "original");
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires transaction descriptor support - see TEST-018"]
+async fn test_transaction_savepoint() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Create temp table
+    client
+        .execute("CREATE TABLE #tx_savepoint (id INT, value NVARCHAR(50))", &[])
+        .await
+        .expect("Create table failed");
+
+    // Begin transaction
+    let mut tx = client.begin_transaction().await.expect("Begin failed");
+
+    // Insert first row
+    tx.execute("INSERT INTO #tx_savepoint VALUES (1, 'first')", &[])
+        .await
+        .expect("Insert failed");
+
+    // Create savepoint
+    let savepoint = tx.save_point("sp1").await.expect("Savepoint failed");
+
+    // Insert second row
+    tx.execute("INSERT INTO #tx_savepoint VALUES (2, 'second')", &[])
+        .await
+        .expect("Insert failed");
+
+    // Rollback to savepoint (undoes second insert)
+    tx.rollback_to(&savepoint).await.expect("Rollback to savepoint failed");
+
+    // Commit the transaction (only first row should exist)
+    let mut client = tx.commit().await.expect("Commit failed");
+
+    // Verify only first row exists
+    let rows = client
+        .query("SELECT id FROM #tx_savepoint ORDER BY id", &[])
+        .await
+        .expect("Query failed");
+
+    let ids: Vec<i32> = rows
+        .filter_map(|r| r.ok())
+        .map(|row| row.get(0).unwrap())
+        .collect();
+
+    assert_eq!(ids, vec![1], "Only first row should exist after savepoint rollback");
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires transaction descriptor support - see TEST-018"]
+async fn test_query_within_transaction() {
+    let config = get_test_config().expect("SQL Server config required");
+    let client = Client::connect(config).await.expect("Failed to connect");
+
+    // Begin transaction
+    let mut tx = client.begin_transaction().await.expect("Begin failed");
+
+    // Query within transaction should work
+    let rows = tx
+        .query("SELECT 1 AS value", &[])
+        .await
+        .expect("Query in transaction failed");
+
+    let values: Vec<i32> = rows
+        .filter_map(|r| r.ok())
+        .map(|row| row.get(0).unwrap())
+        .collect();
+
+    assert_eq!(values, vec![1]);
+
+    // Commit and close
+    let client = tx.commit().await.expect("Commit failed");
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires transaction descriptor support - see TEST-018"]
+async fn test_multiple_savepoints() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Create temp table
+    client
+        .execute("CREATE TABLE #tx_multi_sp (step INT)", &[])
+        .await
+        .expect("Create table failed");
+
+    // Begin transaction
+    let mut tx = client.begin_transaction().await.expect("Begin failed");
+
+    tx.execute("INSERT INTO #tx_multi_sp VALUES (1)", &[])
+        .await
+        .expect("Insert 1 failed");
+
+    let sp1 = tx.save_point("sp1").await.expect("Savepoint 1 failed");
+
+    tx.execute("INSERT INTO #tx_multi_sp VALUES (2)", &[])
+        .await
+        .expect("Insert 2 failed");
+
+    let sp2 = tx.save_point("sp2").await.expect("Savepoint 2 failed");
+
+    tx.execute("INSERT INTO #tx_multi_sp VALUES (3)", &[])
+        .await
+        .expect("Insert 3 failed");
+
+    // Rollback to sp2 (removes step 3)
+    tx.rollback_to(&sp2).await.expect("Rollback to sp2 failed");
+
+    // Query to verify steps 1 and 2 exist
+    let rows = tx
+        .query("SELECT COUNT(*) FROM #tx_multi_sp", &[])
+        .await
+        .expect("Count query failed");
+
+    let count: i32 = rows
+        .filter_map(|r| r.ok())
+        .next()
+        .map(|row| row.get(0).unwrap())
+        .unwrap_or(0);
+
+    assert_eq!(count, 2, "Should have 2 rows after rollback to sp2");
+
+    // Rollback to sp1 (removes step 2)
+    tx.rollback_to(&sp1).await.expect("Rollback to sp1 failed");
+
+    // Query to verify only step 1 exists
+    let rows = tx
+        .query("SELECT COUNT(*) FROM #tx_multi_sp", &[])
+        .await
+        .expect("Count query failed");
+
+    let count: i32 = rows
+        .filter_map(|r| r.ok())
+        .next()
+        .map(|row| row.get(0).unwrap())
+        .unwrap_or(0);
+
+    assert_eq!(count, 1, "Should have 1 row after rollback to sp1");
+
+    let client = tx.commit().await.expect("Commit failed");
+    client.close().await.expect("Failed to close");
+}
+
+// =============================================================================
+// Multi-Result Set Tests
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_multi_result_set() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Execute a batch with multiple SELECT statements
+    let mut results = client
+        .query_multiple("SELECT 1 AS a; SELECT 2 AS b, 3 AS c; SELECT 4 AS d, 5 AS e, 6 AS f;", &[])
+        .await
+        .expect("Query failed");
+
+    // Verify we have 3 result sets
+    assert_eq!(results.result_count(), 3, "Should have 3 result sets");
+    assert_eq!(results.current_result_index(), 0, "Should start at first result");
+
+    // Process first result set (1 column, 1 row)
+    let columns = results.columns().expect("Should have columns");
+    assert_eq!(columns.len(), 1, "First result should have 1 column");
+    assert_eq!(columns[0].name, "a");
+
+    let row = results.next_row().await.expect("Should get row").expect("Row should exist");
+    let a: i32 = row.get(0).expect("Should get value");
+    assert_eq!(a, 1);
+
+    // No more rows in first result
+    assert!(results.next_row().await.expect("Should succeed").is_none());
+
+    // Move to second result set
+    assert!(results.has_more_results(), "Should have more results");
+    assert!(results.next_result().await.expect("next_result should succeed"), "Should advance to second result");
+    assert_eq!(results.current_result_index(), 1);
+
+    // Process second result set (2 columns, 1 row)
+    let columns = results.columns().expect("Should have columns");
+    assert_eq!(columns.len(), 2, "Second result should have 2 columns");
+    assert_eq!(columns[0].name, "b");
+    assert_eq!(columns[1].name, "c");
+
+    let row = results.next_row().await.expect("Should get row").expect("Row should exist");
+    let b: i32 = row.get(0).expect("Should get value");
+    let c: i32 = row.get(1).expect("Should get value");
+    assert_eq!(b, 2);
+    assert_eq!(c, 3);
+
+    // Move to third result set
+    assert!(results.has_more_results(), "Should have more results");
+    assert!(results.next_result().await.expect("next_result should succeed"), "Should advance to third result");
+    assert_eq!(results.current_result_index(), 2);
+
+    // Process third result set (3 columns, 1 row)
+    let columns = results.columns().expect("Should have columns");
+    assert_eq!(columns.len(), 3, "Third result should have 3 columns");
+    assert_eq!(columns[0].name, "d");
+    assert_eq!(columns[1].name, "e");
+    assert_eq!(columns[2].name, "f");
+
+    let row = results.next_row().await.expect("Should get row").expect("Row should exist");
+    let d: i32 = row.get(0).expect("Should get value");
+    let e: i32 = row.get(1).expect("Should get value");
+    let f: i32 = row.get(2).expect("Should get value");
+    assert_eq!(d, 4);
+    assert_eq!(e, 5);
+    assert_eq!(f, 6);
+
+    // No more result sets
+    assert!(!results.has_more_results(), "Should not have more results");
+    assert!(!results.next_result().await.expect("next_result should succeed"), "Should not advance");
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_multi_result_with_rows() {
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Create temp tables and insert data
+    client
+        .execute("CREATE TABLE #multi_r1 (id INT, name NVARCHAR(50))", &[])
+        .await
+        .expect("Create table 1 failed");
+
+    client
+        .execute("INSERT INTO #multi_r1 VALUES (1, 'Alice'), (2, 'Bob')", &[])
+        .await
+        .expect("Insert failed");
+
+    client
+        .execute("CREATE TABLE #multi_r2 (code NVARCHAR(10), value INT)", &[])
+        .await
+        .expect("Create table 2 failed");
+
+    client
+        .execute("INSERT INTO #multi_r2 VALUES ('A', 100), ('B', 200), ('C', 300)", &[])
+        .await
+        .expect("Insert failed");
+
+    // Execute batch querying both tables
+    let mut results = client
+        .query_multiple("SELECT * FROM #multi_r1; SELECT * FROM #multi_r2;", &[])
+        .await
+        .expect("Query failed");
+
+    // Process first result (2 rows)
+    assert_eq!(results.result_count(), 2);
+
+    let mut row_count = 0;
+    while let Some(row) = results.next_row().await.expect("Row read failed") {
+        let id: i32 = row.get(0).expect("Get id");
+        let name: String = row.get(1).expect("Get name");
+        match row_count {
+            0 => {
+                assert_eq!(id, 1);
+                assert_eq!(name, "Alice");
+            }
+            1 => {
+                assert_eq!(id, 2);
+                assert_eq!(name, "Bob");
+            }
+            _ => panic!("Too many rows"),
+        }
+        row_count += 1;
+    }
+    assert_eq!(row_count, 2, "First result should have 2 rows");
+
+    // Move to second result
+    assert!(results.next_result().await.expect("Advance failed"));
+
+    // Process second result (3 rows)
+    let mut row_count = 0;
+    while let Some(row) = results.next_row().await.expect("Row read failed") {
+        let code: String = row.get(0).expect("Get code");
+        let value: i32 = row.get(1).expect("Get value");
+        match row_count {
+            0 => {
+                assert_eq!(code, "A");
+                assert_eq!(value, 100);
+            }
+            1 => {
+                assert_eq!(code, "B");
+                assert_eq!(value, 200);
+            }
+            2 => {
+                assert_eq!(code, "C");
+                assert_eq!(value, 300);
+            }
+            _ => panic!("Too many rows"),
+        }
+        row_count += 1;
+    }
+    assert_eq!(row_count, 3, "Second result should have 3 rows");
+
+    client.close().await.expect("Failed to close");
+}
+
+// =============================================================================
+// Transaction Isolation Level Tests (TEST-018)
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_transaction_isolation_read_uncommitted() {
+    use mssql_client::IsolationLevel;
+
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Create temp table
+    client
+        .execute("CREATE TABLE #iso_test (id INT, value NVARCHAR(50))", &[])
+        .await
+        .expect("Create table failed");
+
+    // Begin transaction with READ UNCOMMITTED
+    let mut tx = client
+        .begin_transaction_with_isolation(IsolationLevel::ReadUncommitted)
+        .await
+        .expect("Begin failed");
+
+    // Insert data
+    tx.execute("INSERT INTO #iso_test VALUES (1, 'test')", &[])
+        .await
+        .expect("Insert failed");
+
+    // Query to verify data is accessible
+    let rows = tx
+        .query("SELECT COUNT(*) FROM #iso_test", &[])
+        .await
+        .expect("Query failed");
+
+    let count: i32 = rows
+        .filter_map(|r| r.ok())
+        .next()
+        .map(|row| row.get(0).unwrap())
+        .unwrap_or(0);
+
+    assert_eq!(count, 1, "Should see the inserted row");
+
+    let client = tx.commit().await.expect("Commit failed");
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_transaction_isolation_serializable() {
+    use mssql_client::IsolationLevel;
+
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Create temp table
+    client
+        .execute("CREATE TABLE #iso_serial (id INT PRIMARY KEY, value INT)", &[])
+        .await
+        .expect("Create table failed");
+
+    // Insert initial data
+    client
+        .execute("INSERT INTO #iso_serial VALUES (1, 100)", &[])
+        .await
+        .expect("Insert failed");
+
+    // Begin transaction with SERIALIZABLE isolation
+    let mut tx = client
+        .begin_transaction_with_isolation(IsolationLevel::Serializable)
+        .await
+        .expect("Begin failed");
+
+    // Read the data (this will hold locks under SERIALIZABLE)
+    let rows = tx
+        .query("SELECT value FROM #iso_serial WHERE id = 1", &[])
+        .await
+        .expect("Query failed");
+
+    let value: i32 = rows
+        .filter_map(|r| r.ok())
+        .next()
+        .map(|row| row.get(0).unwrap())
+        .unwrap_or(0);
+
+    assert_eq!(value, 100);
+
+    // Update the value
+    tx.execute("UPDATE #iso_serial SET value = 200 WHERE id = 1", &[])
+        .await
+        .expect("Update failed");
+
+    // Commit
+    let client = tx.commit().await.expect("Commit failed");
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_transaction_isolation_repeatable_read() {
+    use mssql_client::IsolationLevel;
+
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Create temp table
+    client
+        .execute("CREATE TABLE #iso_rr (id INT, value INT)", &[])
+        .await
+        .expect("Create table failed");
+
+    // Insert test data
+    client
+        .execute("INSERT INTO #iso_rr VALUES (1, 10), (2, 20), (3, 30)", &[])
+        .await
+        .expect("Insert failed");
+
+    // Begin transaction with REPEATABLE READ
+    let mut tx = client
+        .begin_transaction_with_isolation(IsolationLevel::RepeatableRead)
+        .await
+        .expect("Begin failed");
+
+    // First read
+    let rows = tx
+        .query("SELECT SUM(value) FROM #iso_rr", &[])
+        .await
+        .expect("Query failed");
+
+    let sum1: i32 = rows
+        .filter_map(|r| r.ok())
+        .next()
+        .map(|row| row.get(0).unwrap())
+        .unwrap_or(0);
+
+    assert_eq!(sum1, 60);
+
+    // Second read within same transaction should return same result
+    let rows = tx
+        .query("SELECT SUM(value) FROM #iso_rr", &[])
+        .await
+        .expect("Query failed");
+
+    let sum2: i32 = rows
+        .filter_map(|r| r.ok())
+        .next()
+        .map(|row| row.get(0).unwrap())
+        .unwrap_or(0);
+
+    assert_eq!(sum1, sum2, "Both reads should return the same sum");
+
+    let client = tx.commit().await.expect("Commit failed");
+    client.close().await.expect("Failed to close");
+}
+
+// =============================================================================
+// Statement Cache Tests (TEST-019)
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_repeated_parameterized_queries() {
+    // This test verifies that repeated parameterized queries work correctly.
+    // While we use sp_executesql internally (not sp_prepare/sp_execute),
+    // this exercises the query path that would benefit from caching.
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Execute the same parameterized query multiple times
+    for i in 1..=10 {
+        let param = i as i32;
+        let rows = client
+            .query("SELECT @p1 * 2 AS doubled", &[&param])
+            .await
+            .expect("Query failed");
+
+        let result: Vec<i32> = rows
+            .filter_map(|r| r.ok())
+            .map(|row| row.get(0).unwrap())
+            .collect();
+
+        assert_eq!(result, vec![param * 2], "Iteration {} should return doubled value", i);
+    }
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_statement_cache_with_different_queries() {
+    // This test verifies that different SQL queries work independently,
+    // simulating how the statement cache would track different statements.
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Create temp table for testing
+    client
+        .execute("CREATE TABLE #cache_test (id INT, value NVARCHAR(50))", &[])
+        .await
+        .expect("Create table failed");
+
+    // Insert test data
+    client
+        .execute("INSERT INTO #cache_test VALUES (1, 'one'), (2, 'two'), (3, 'three')", &[])
+        .await
+        .expect("Insert failed");
+
+    // Query 1: SELECT by id
+    let query1 = "SELECT value FROM #cache_test WHERE id = @p1";
+
+    // Query 2: SELECT all above id
+    let query2 = "SELECT id, value FROM #cache_test WHERE id > @p1 ORDER BY id";
+
+    // Interleave different queries to test cache discrimination
+    let result1 = client.query(query1, &[&1i32]).await.expect("Query 1 failed");
+    let values1: Vec<String> = result1.filter_map(|r| r.ok()).map(|row| row.get(0).unwrap()).collect();
+    assert_eq!(values1, vec!["one"]);
+
+    let result2 = client.query(query2, &[&1i32]).await.expect("Query 2 failed");
+    let ids2: Vec<i32> = result2.filter_map(|r| r.ok()).map(|row| row.get(0).unwrap()).collect();
+    assert_eq!(ids2, vec![2, 3]);
+
+    // Repeat query 1 with different parameter
+    let result1b = client.query(query1, &[&2i32]).await.expect("Query 1b failed");
+    let values1b: Vec<String> = result1b.filter_map(|r| r.ok()).map(|row| row.get(0).unwrap()).collect();
+    assert_eq!(values1b, vec!["two"]);
+
+    // Repeat query 2 with different parameter
+    let result2b = client.query(query2, &[&2i32]).await.expect("Query 2b failed");
+    let ids2b: Vec<i32> = result2b.filter_map(|r| r.ok()).map(|row| row.get(0).unwrap()).collect();
+    assert_eq!(ids2b, vec![3]);
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_high_query_volume() {
+    // Stress test for query execution to verify stability under load.
+    // This would exercise statement cache eviction if sp_prepare were used.
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Execute 500 different parameterized queries
+    // This exceeds the default cache size of 256, which would trigger eviction
+    for i in 0..500 {
+        let param = i as i32;
+        // Use unique SQL text for each iteration to simulate many different statements
+        let sql = format!("SELECT @p1 + {} AS result", i);
+        let rows = client
+            .query(&sql, &[&param])
+            .await
+            .unwrap_or_else(|e| panic!("Query {} failed: {:?}", i, e));
+
+        let result: i32 = rows
+            .filter_map(|r| r.ok())
+            .next()
+            .map(|row| row.get(0).unwrap())
+            .unwrap_or(-1);
+
+        assert_eq!(result, param + i, "Query {} should return correct sum", i);
+    }
+
+    client.close().await.expect("Failed to close");
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_same_sql_different_params() {
+    // This test verifies that the same SQL template works correctly with different parameters.
+    // This is the primary use case for prepared statement caching.
+    let config = get_test_config().expect("SQL Server config required");
+    let mut client = Client::connect(config).await.expect("Failed to connect");
+
+    // Create temp table
+    client
+        .execute("CREATE TABLE #params_test (id INT PRIMARY KEY, name NVARCHAR(50), score INT)", &[])
+        .await
+        .expect("Create table failed");
+
+    // Insert test data
+    for i in 1..=100 {
+        let name = format!("User{}", i);
+        let score = i * 10;
+        client
+            .execute(
+                "INSERT INTO #params_test VALUES (@p1, @p2, @p3)",
+                &[&(i as i32), &name.as_str(), &(score as i32)],
+            )
+            .await
+            .unwrap_or_else(|e| panic!("Insert {} failed: {:?}", i, e));
+    }
+
+    // Query with same SQL, different params (cache should help here)
+    let query = "SELECT name, score FROM #params_test WHERE id = @p1";
+
+    for i in 1..=100 {
+        let rows = client
+            .query(query, &[&(i as i32)])
+            .await
+            .unwrap_or_else(|e| panic!("Query for id {} failed: {:?}", i, e));
+
+        let results: Vec<(String, i32)> = rows
+            .filter_map(|r| r.ok())
+            .map(|row| (row.get(0).unwrap(), row.get(1).unwrap()))
+            .collect();
+
+        assert_eq!(results.len(), 1, "Should find exactly one row for id {}", i);
+        assert_eq!(results[0].0, format!("User{}", i));
+        assert_eq!(results[0].1, (i * 10) as i32);
+    }
+
+    client.close().await.expect("Failed to close");
+}
