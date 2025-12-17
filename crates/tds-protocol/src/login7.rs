@@ -605,8 +605,8 @@ impl Login7 {
 
             // Step 1: Swap nibbles (rotate by 4 bits)
             // Step 2: XOR with 0xA5
-            let low_enc = ((low << 4) | (low >> 4)) ^ 0xA5;
-            let high_enc = ((high << 4) | (high >> 4)) ^ 0xA5;
+            let low_enc = low.rotate_right(4) ^ 0xA5;
+            let high_enc = high.rotate_right(4) ^ 0xA5;
 
             dst.put_u8(low_enc);
             dst.put_u8(high_enc);

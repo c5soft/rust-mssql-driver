@@ -486,7 +486,7 @@ async fn test_pool_high_throughput() {
     for _ in 0..20 {
         let pool = pool.clone();
         let query_count = query_count.clone();
-        let start = start.clone();
+        let start = start;
 
         handles.push(tokio::spawn(async move {
             while start.elapsed() < runtime {

@@ -133,12 +133,10 @@ async fn main() -> Result<(), Error> {
 fn demonstrate_from_row() {
     // Create a mock row with sample data
     // In practice, this comes from query results
-    let _values = vec![
-        SqlValue::Int(42),
+    let _values = [SqlValue::Int(42),
         SqlValue::String("Alice".into()),
         SqlValue::String("alice@example.com".into()),
-        SqlValue::String("+1-555-1234".into()),
-    ];
+        SqlValue::String("+1-555-1234".into())];
 
     println!("Mock row data:");
     println!("  id: 42");
@@ -212,7 +210,7 @@ fn demonstrate_tvp() {
     println!("\nUsage with stored procedure:");
     println!("  // First, create the type in SQL Server:");
     println!("  // CREATE TYPE dbo.UserIdList AS TABLE (UserId INT NOT NULL);");
-    println!("");
+    println!();
     println!("  // Then use it in Rust:");
     println!("  let tvp = TvpValue::new(&user_ids)?;");
     println!("  client.execute(");

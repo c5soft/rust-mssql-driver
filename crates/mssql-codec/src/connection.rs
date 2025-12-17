@@ -204,7 +204,7 @@ where
                     // Check for DONE token with ATTENTION flag
                     // The DONE token is at the start of the payload
                     if packet.header.packet_type == PacketType::TabularResult
-                        && packet.payload.len() >= 1
+                        && !packet.payload.is_empty()
                     {
                         // TokenType::Done = 0xFD
                         // Check if this packet contains a Done token
@@ -391,7 +391,7 @@ mod tests {
 
         // DONE token with ATTN flag set (status = 0x0020)
         let payload_with_attn = BytesMut::from(&[0xFD, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00][..]);
-        let packet_with_attn = Packet::new(header.clone(), payload_with_attn);
+        let packet_with_attn = Packet::new(header, payload_with_attn);
 
         // DONE token without ATTN flag (status = 0x0000)
         let payload_no_attn = BytesMut::from(&[0xFD, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00][..]);

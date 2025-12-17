@@ -345,7 +345,7 @@ impl TypeInfo {
                     buf.put_u8(len as u8);
                 }
             }
-            0x2A | 0x29 | 0x2B => {
+            0x29..=0x2B => {
                 // DATETIME2TYPE, TIMETYPE, DATETIMEOFFSETTYPE
                 if let Some(scale) = self.scale {
                     buf.put_u8(scale);

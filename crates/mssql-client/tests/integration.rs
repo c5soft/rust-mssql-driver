@@ -1233,7 +1233,7 @@ async fn test_repeated_parameterized_queries() {
 
     // Execute the same parameterized query multiple times
     for i in 1..=10 {
-        let param = i as i32;
+        let param = i;
         let rows = client
             .query("SELECT @p1 * 2 AS doubled", &[&param])
             .await
@@ -1309,7 +1309,7 @@ async fn test_high_query_volume() {
     // Execute 500 different parameterized queries
     // This exceeds the default cache size of 256, which would trigger eviction
     for i in 0..500 {
-        let param = i as i32;
+        let param = i;
         // Use unique SQL text for each iteration to simulate many different statements
         let sql = format!("SELECT @p1 + {} AS result", i);
         let rows = client
@@ -1350,7 +1350,7 @@ async fn test_same_sql_different_params() {
         client
             .execute(
                 "INSERT INTO #params_test VALUES (@p1, @p2, @p3)",
-                &[&(i as i32), &name.as_str(), &(score as i32)],
+                &[&{ i }, &name.as_str(), &{ score }],
             )
             .await
             .unwrap_or_else(|e| panic!("Insert {} failed: {:?}", i, e));
@@ -1361,7 +1361,7 @@ async fn test_same_sql_different_params() {
 
     for i in 1..=100 {
         let rows = client
-            .query(query, &[&(i as i32)])
+            .query(query, &[&{ i }])
             .await
             .unwrap_or_else(|e| panic!("Query for id {} failed: {:?}", i, e));
 
@@ -1372,7 +1372,7 @@ async fn test_same_sql_different_params() {
 
         assert_eq!(results.len(), 1, "Should find exactly one row for id {}", i);
         assert_eq!(results[0].0, format!("User{}", i));
-        assert_eq!(results[0].1, (i * 10) as i32);
+        assert_eq!(results[0].1, { (i * 10) });
     }
 
     client.close().await.expect("Failed to close");

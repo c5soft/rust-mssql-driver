@@ -51,7 +51,7 @@ pub struct QueryStream<'a> {
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
-impl<'a> QueryStream<'a> {
+impl QueryStream<'_> {
     /// Create a new query stream with columns and buffered rows.
     pub(crate) fn new(columns: Vec<Column>, rows: Vec<Row>) -> Self {
         Self {

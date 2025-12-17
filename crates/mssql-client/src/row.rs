@@ -376,8 +376,8 @@ impl Row {
             return Err(TypeError::UnexpectedNull);
         }
 
-        // For now, convert to SqlValue then use FromSql
-        // TODO: Direct parsing from bytes for better performance
+        // Parse via SqlValue then convert to target type
+        // Note: parse_value uses zero-copy buffer slicing (Arc<Bytes>::slice)
         let value = self.parse_value(index, slice)?;
         T::from_sql(&value)
     }
@@ -546,7 +546,7 @@ pub struct RowIter<'a> {
     index: usize,
 }
 
-impl<'a> Iterator for RowIter<'a> {
+impl Iterator for RowIter<'_> {
     type Item = SqlValue;
 
     fn next(&mut self) -> Option<Self::Item> {

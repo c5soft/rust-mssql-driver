@@ -85,8 +85,8 @@ impl SqlServerAuth {
                 let byte2 = (c >> 8) as u8;
 
                 // XOR with 0xA5 and swap nibbles
-                let encoded1 = ((byte1 ^ 0xA5) << 4) | ((byte1 ^ 0xA5) >> 4);
-                let encoded2 = ((byte2 ^ 0xA5) << 4) | ((byte2 ^ 0xA5) >> 4);
+                let encoded1 = (byte1 ^ 0xA5).rotate_right(4);
+                let encoded2 = (byte2 ^ 0xA5).rotate_right(4);
 
                 [encoded1, encoded2]
             })

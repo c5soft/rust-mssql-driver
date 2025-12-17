@@ -234,13 +234,11 @@ fn bench_sql_value_operations(c: &mut Criterion) {
     });
 
     // Pattern matching for null checks
-    let values = vec![
-        SqlValue::Int(1),
+    let values = [SqlValue::Int(1),
         SqlValue::Null,
         SqlValue::String("test".to_string()),
         SqlValue::Null,
-        SqlValue::BigInt(100),
-    ];
+        SqlValue::BigInt(100)];
 
     group.bench_function("null_check_iter", |b| {
         b.iter(|| {

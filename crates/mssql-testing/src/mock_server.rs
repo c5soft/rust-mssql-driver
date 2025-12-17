@@ -908,7 +908,7 @@ fn encode_error(dst: &mut BytesMut, number: i32, message: &str, severity: u8) {
 
     // ERROR: number (4) + state (1) + class (1) + message (us_varchar) +
     //        server (b_varchar) + procedure (b_varchar) + line (4)
-    let data_len = 4 + 1 + 1 + 2 + msg_utf16.len() * 2 + 1 + server_utf16.len() * 2 + 1 + 0 + 4;
+    let data_len = (4 + 1 + 1 + 2 + msg_utf16.len() * 2 + 1 + server_utf16.len() * 2 + 1) + 4;
 
     dst.put_u8(TokenType::Error as u8);
     dst.put_u16_le(data_len as u16);

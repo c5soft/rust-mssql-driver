@@ -117,7 +117,7 @@ pub struct Transaction<'a> {
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
-impl<'a> Transaction<'a> {
+impl Transaction<'_> {
     /// Create a new transaction with default isolation level.
     #[allow(dead_code)] // Used when transaction begin is implemented
     pub(crate) fn new() -> Self {

@@ -655,7 +655,7 @@ impl Client<Disconnected> {
             .read_message()
             .await
             .map_err(|e| Error::Protocol(e.to_string()))?
-            .ok_or_else(|| Error::ConnectionClosed)?;
+            .ok_or(Error::ConnectionClosed)?;
 
         PreLogin::decode(&message.payload[..]).map_err(|e| Error::Protocol(e.to_string()))
     }
@@ -687,7 +687,7 @@ impl Client<Disconnected> {
             .read_message()
             .await
             .map_err(|e| Error::Protocol(e.to_string()))?
-            .ok_or_else(|| Error::ConnectionClosed)?;
+            .ok_or(Error::ConnectionClosed)?;
 
         let response_bytes = message.payload;
 
@@ -798,7 +798,7 @@ impl<S: ConnectionState> Client<S> {
         let connection = self
             .connection
             .as_mut()
-            .ok_or_else(|| Error::ConnectionClosed)?;
+            .ok_or(Error::ConnectionClosed)?;
 
         match connection {
             ConnectionHandle::Tls(conn) => {
@@ -831,7 +831,7 @@ impl<S: ConnectionState> Client<S> {
         let connection = self
             .connection
             .as_mut()
-            .ok_or_else(|| Error::ConnectionClosed)?;
+            .ok_or(Error::ConnectionClosed)?;
 
         match connection {
             ConnectionHandle::Tls(conn) => {
@@ -944,7 +944,7 @@ impl<S: ConnectionState> Client<S> {
         let connection = self
             .connection
             .as_mut()
-            .ok_or_else(|| Error::ConnectionClosed)?;
+            .ok_or(Error::ConnectionClosed)?;
 
         let message = match connection {
             ConnectionHandle::Tls(conn) => conn
@@ -960,7 +960,7 @@ impl<S: ConnectionState> Client<S> {
                 .await
                 .map_err(|e| Error::Protocol(e.to_string()))?,
         }
-        .ok_or_else(|| Error::ConnectionClosed)?;
+        .ok_or(Error::ConnectionClosed)?;
 
         let mut parser = TokenParser::new(message.payload);
         let mut columns: Vec<crate::row::Column> = Vec::new();
@@ -1727,7 +1727,7 @@ impl<S: ConnectionState> Client<S> {
         let connection = self
             .connection
             .as_mut()
-            .ok_or_else(|| Error::ConnectionClosed)?;
+            .ok_or(Error::ConnectionClosed)?;
 
         let message = match connection {
             ConnectionHandle::Tls(conn) => conn
@@ -1743,7 +1743,7 @@ impl<S: ConnectionState> Client<S> {
                 .await
                 .map_err(|e| Error::Protocol(e.to_string()))?,
         }
-        .ok_or_else(|| Error::ConnectionClosed)?;
+        .ok_or(Error::ConnectionClosed)?;
 
         let mut parser = TokenParser::new(message.payload);
         let mut rows_affected = 0u64;
@@ -1829,7 +1829,7 @@ impl<S: ConnectionState> Client<S> {
         let connection = self
             .connection
             .as_mut()
-            .ok_or_else(|| Error::ConnectionClosed)?;
+            .ok_or(Error::ConnectionClosed)?;
 
         let message = match connection {
             ConnectionHandle::Tls(conn) => conn
@@ -1845,7 +1845,7 @@ impl<S: ConnectionState> Client<S> {
                 .await
                 .map_err(|e| Error::Protocol(e.to_string()))?,
         }
-        .ok_or_else(|| Error::ConnectionClosed)?;
+        .ok_or(Error::ConnectionClosed)?;
 
         let mut parser = TokenParser::new(message.payload);
         let mut transaction_descriptor: u64 = 0;
@@ -2043,7 +2043,7 @@ impl Client<Ready> {
         let connection = self
             .connection
             .as_mut()
-            .ok_or_else(|| Error::ConnectionClosed)?;
+            .ok_or(Error::ConnectionClosed)?;
 
         let message = match connection {
             ConnectionHandle::Tls(conn) => conn
@@ -2059,7 +2059,7 @@ impl Client<Ready> {
                 .await
                 .map_err(|e| Error::Protocol(e.to_string()))?,
         }
-        .ok_or_else(|| Error::ConnectionClosed)?;
+        .ok_or(Error::ConnectionClosed)?;
 
         let mut parser = TokenParser::new(message.payload);
         let mut result_sets: Vec<crate::stream::ResultSet> = Vec::new();
