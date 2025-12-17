@@ -693,3 +693,268 @@ async fn test_pool_detach_connection() {
 
     pool.close().await;
 }
+
+// =============================================================================
+// Deadlock Detection Tests (TEST-015)
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_pool_no_deadlock_under_contention() {
+    // Test that the pool doesn't deadlock when many tasks compete for few connections.
+    // This is a common failure mode for pool implementations.
+    let client_config = get_test_config().expect("SQL Server config required");
+
+    let pool = Arc::new(
+        Pool::builder()
+            .client_config(client_config)
+            .max_connections(2) // Intentionally small to increase contention
+            .connection_timeout(Duration::from_secs(30))
+            .build()
+            .await
+            .expect("Failed to create pool"),
+    );
+
+    let success_count = Arc::new(AtomicU32::new(0));
+    let mut handles = Vec::new();
+
+    // 20 tasks competing for 2 connections
+    for i in 0..20 {
+        let pool = pool.clone();
+        let success_count = success_count.clone();
+
+        handles.push(tokio::spawn(async move {
+            // Each task does multiple operations
+            for j in 0..5 {
+                let mut conn = pool.get().await.expect("Should get connection without deadlock");
+
+                // Simulate some work
+                let sql = format!("SELECT {} + {} AS result", i, j);
+                let _ = conn.query(&sql, &[]).await;
+
+                // Important: Drop connection before getting next one
+                drop(conn);
+            }
+            success_count.fetch_add(1, Ordering::Relaxed);
+        }));
+    }
+
+    // Use a timeout to detect deadlocks
+    let timeout_result = tokio::time::timeout(Duration::from_secs(60), async {
+        for handle in handles {
+            handle.await.expect("Task panicked");
+        }
+    })
+    .await;
+
+    assert!(timeout_result.is_ok(), "Pool deadlocked - tasks did not complete within timeout");
+    assert_eq!(success_count.load(Ordering::Relaxed), 20, "All tasks should complete");
+
+    pool.close().await;
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_pool_no_deadlock_nested_acquisition() {
+    // Test that attempting nested connection acquisition (getting a second connection
+    // while holding one) doesn't cause deadlock with proper timeouts.
+    let client_config = get_test_config().expect("SQL Server config required");
+
+    let pool = Arc::new(
+        Pool::builder()
+            .client_config(client_config)
+            .max_connections(1) // Single connection to force contention
+            .connection_timeout(Duration::from_millis(500)) // Short timeout
+            .build()
+            .await
+            .expect("Failed to create pool"),
+    );
+
+    // Get the only connection
+    let _conn1 = pool.get().await.expect("First connection should succeed");
+
+    // Trying to get another should timeout, not deadlock
+    let result = pool.get().await;
+    assert!(
+        matches!(result, Err(PoolError::Timeout)),
+        "Should timeout, not deadlock"
+    );
+
+    pool.close().await;
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_pool_semaphore_fairness() {
+    // Test that connection acquisition is fair under contention.
+    // Tasks waiting longer should get connections before newer tasks.
+    let client_config = get_test_config().expect("SQL Server config required");
+
+    let pool = Arc::new(
+        Pool::builder()
+            .client_config(client_config)
+            .max_connections(1)
+            .connection_timeout(Duration::from_secs(30))
+            .build()
+            .await
+            .expect("Failed to create pool"),
+    );
+
+    let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    // Start 5 tasks that will queue up
+    let mut handles = Vec::new();
+    for i in 0..5 {
+        let pool = pool.clone();
+        let order = order.clone();
+
+        handles.push(tokio::spawn(async move {
+            // Small delay so tasks start in sequence
+            tokio::time::sleep(Duration::from_millis(i as u64 * 50)).await;
+
+            let mut conn = pool.get().await.expect("Should get connection");
+
+            // Record when this task got the connection
+            order.lock().unwrap().push(i);
+
+            // Hold connection briefly
+            let _ = conn.query("SELECT 1", &[]).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }));
+    }
+
+    // Wait for all tasks
+    for handle in handles {
+        handle.await.expect("Task panicked");
+    }
+
+    let final_order = order.lock().unwrap().clone();
+    println!("Connection acquisition order: {:?}", final_order);
+
+    // First task should always be first (it started first and no queue yet)
+    assert_eq!(final_order[0], 0, "First task should get connection first");
+
+    // The order should generally be sequential (FIFO) due to semaphore fairness
+    // Allow some flexibility for timing variations
+    let mut inversions = 0;
+    for i in 1..final_order.len() {
+        if final_order[i] < final_order[i - 1] {
+            inversions += 1;
+        }
+    }
+
+    // Tokio's semaphore is FIFO, so we expect very few inversions (ideally 0)
+    assert!(
+        inversions <= 1,
+        "Too many order inversions ({}), semaphore may not be fair",
+        inversions
+    );
+
+    pool.close().await;
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_pool_rapid_acquire_release_no_deadlock() {
+    // Rapidly acquire and release connections to stress the synchronization primitives.
+    let client_config = get_test_config().expect("SQL Server config required");
+
+    let pool = Arc::new(
+        Pool::builder()
+            .client_config(client_config)
+            .max_connections(4)
+            .connection_timeout(Duration::from_secs(30))
+            .build()
+            .await
+            .expect("Failed to create pool"),
+    );
+
+    let iterations = Arc::new(AtomicU32::new(0));
+    let mut handles = Vec::new();
+
+    // 8 workers doing rapid acquire/release
+    for _ in 0..8 {
+        let pool = pool.clone();
+        let iterations = iterations.clone();
+
+        handles.push(tokio::spawn(async move {
+            for _ in 0..100 {
+                let conn = pool.get().await.expect("Should get connection");
+                // Immediately release
+                drop(conn);
+                iterations.fetch_add(1, Ordering::Relaxed);
+            }
+        }));
+    }
+
+    let timeout_result = tokio::time::timeout(Duration::from_secs(30), async {
+        for handle in handles {
+            handle.await.expect("Task panicked");
+        }
+    })
+    .await;
+
+    assert!(timeout_result.is_ok(), "Rapid acquire/release caused deadlock");
+    assert_eq!(
+        iterations.load(Ordering::Relaxed),
+        800,
+        "All 800 iterations should complete"
+    );
+
+    pool.close().await;
+}
+
+#[tokio::test]
+#[ignore = "Requires SQL Server"]
+async fn test_pool_mixed_operations_no_deadlock() {
+    // Mix of get(), try_get(), queries, and drops to stress all code paths.
+    let client_config = get_test_config().expect("SQL Server config required");
+
+    let pool = Arc::new(
+        Pool::builder()
+            .client_config(client_config)
+            .max_connections(3)
+            .connection_timeout(Duration::from_secs(30))
+            .build()
+            .await
+            .expect("Failed to create pool"),
+    );
+
+    let success_count = Arc::new(AtomicU32::new(0));
+    let mut handles = Vec::new();
+
+    for i in 0..10 {
+        let pool = pool.clone();
+        let success_count = success_count.clone();
+
+        handles.push(tokio::spawn(async move {
+            for j in 0..20 {
+                // Alternate between get() and try_get()
+                if (i + j) % 3 == 0 {
+                    // try_get - may return None
+                    if let Ok(Some(mut conn)) = pool.try_get() {
+                        let _ = conn.query("SELECT 1", &[]).await;
+                    }
+                } else {
+                    // Regular get
+                    if let Ok(mut conn) = pool.get().await {
+                        let _ = conn.query("SELECT 1", &[]).await;
+                    }
+                }
+            }
+            success_count.fetch_add(1, Ordering::Relaxed);
+        }));
+    }
+
+    let timeout_result = tokio::time::timeout(Duration::from_secs(60), async {
+        for handle in handles {
+            handle.await.expect("Task panicked");
+        }
+    })
+    .await;
+
+    assert!(timeout_result.is_ok(), "Mixed operations caused deadlock");
+    assert_eq!(success_count.load(Ordering::Relaxed), 10, "All workers should complete");
+
+    pool.close().await;
+}
