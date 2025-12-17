@@ -232,13 +232,51 @@ impl Pool {
     /// Try to get a connection without waiting.
     ///
     /// Returns `None` if no connections are immediately available.
+    /// This is non-blocking and will not create new connections.
     pub fn try_get(&self) -> Result<Option<PooledConnection>, PoolError> {
         if self.inner.closed.load(Ordering::Acquire) {
             return Err(PoolError::PoolClosed);
         }
 
-        // Placeholder: actual non-blocking acquisition
-        Ok(None)
+        // Try to acquire a permit without waiting
+        let permit = match self.inner.semaphore.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                // No permits available (pool at capacity with all connections in use)
+                return Ok(None);
+            }
+        };
+
+        // Try to get an idle connection (non-blocking)
+        let entry = {
+            let mut idle = self.inner.idle_connections.lock();
+            idle.pop_front()
+        };
+
+        match entry {
+            Some(entry) => {
+                let mut metadata = entry.metadata;
+                metadata.mark_checkout();
+                self.inner.in_use_count.fetch_add(1, Ordering::Relaxed);
+                self.inner.metrics.lock().checkouts_successful += 1;
+
+                tracing::trace!(connection_id = metadata.id, "try_get: reusing idle connection");
+
+                Ok(Some(PooledConnection {
+                    client: Some(entry.client),
+                    metadata,
+                    pool: self.inner.clone(),
+                    client_config: self.client_config.clone(),
+                    _permit: permit,
+                }))
+            }
+            None => {
+                // No idle connections available, return the permit
+                // (don't create a new connection - that would block)
+                drop(permit);
+                Ok(None)
+            }
+        }
     }
 
     /// Get the current pool status.
@@ -542,6 +580,10 @@ impl PooledConnection {
 
 impl Drop for PooledConnection {
     fn drop(&mut self) {
+        // Always decrement in_use_count since it was incremented during checkout.
+        // This handles both normal returns and detached connections.
+        self.pool.in_use_count.fetch_sub(1, Ordering::Relaxed);
+
         if let Some(client) = self.client.take() {
             tracing::trace!(
                 connection_id = self.metadata.id,
@@ -558,7 +600,11 @@ impl Drop for PooledConnection {
             };
 
             self.pool.idle_connections.lock().push_back(entry);
-            self.pool.in_use_count.fetch_sub(1, Ordering::Relaxed);
+        } else {
+            tracing::trace!(
+                connection_id = self.metadata.id,
+                "connection detached, not returning to pool"
+            );
         }
         // Note: the semaphore permit is automatically released when _permit is dropped
     }
