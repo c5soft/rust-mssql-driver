@@ -27,10 +27,12 @@ async fn main() -> Result<(), Error> {
     let database = std::env::var("MSSQL_DATABASE").unwrap_or_else(|_| "master".into());
     let user = std::env::var("MSSQL_USER").unwrap_or_else(|_| "sa".into());
     let password = std::env::var("MSSQL_PASSWORD").unwrap_or_else(|_| "Password123!".into());
+    // Set MSSQL_ENCRYPT=false for development servers without TLS configured
+    let encrypt = std::env::var("MSSQL_ENCRYPT").unwrap_or_else(|_| "true".into());
 
     let conn_str = format!(
-        "Server={};Database={};User Id={};Password={};TrustServerCertificate=true",
-        host, database, user, password
+        "Server={};Database={};User Id={};Password={};TrustServerCertificate=true;Encrypt={}",
+        host, database, user, password, encrypt
     );
 
     let config = Config::from_connection_string(&conn_str)?;
@@ -58,7 +60,7 @@ async fn main() -> Result<(), Error> {
     let user_id = 1i32;
     let rows_affected = client
         .execute(
-            "SELECT @p1 AS input_value, GETDATE() AS current_time",
+            "SELECT @p1 AS input_value, GETDATE() AS query_time",
             &[&user_id],
         )
         .await?;

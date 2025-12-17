@@ -253,7 +253,7 @@ pub struct Row {
 }
 
 impl Row {
-    /// Create a new row with the Arc<Bytes> pattern.
+    /// Create a new row with the `Arc<Bytes>` pattern.
     ///
     /// This is the primary constructor for the reduced-copy pattern.
     pub fn new(
@@ -495,6 +495,7 @@ impl Row {
     /// Parse a value from the buffer at the given slice.
     ///
     /// Uses the mssql-types decode module for efficient binary parsing.
+    /// Optimized to use zero-copy buffer slicing via Arc<Bytes>.
     fn parse_value(&self, index: usize, slice: &ColumnSlice) -> Result<SqlValue, TypeError> {
         if slice.is_null {
             return Ok(SqlValue::Null);
@@ -505,16 +506,24 @@ impl Row {
             actual: format!("no metadata for column {index}"),
         })?;
 
-        let bytes = self.get_bytes(index).ok_or_else(|| TypeError::TypeMismatch {
-            expected: "valid byte slice",
-            actual: "buffer access failed".to_string(),
-        })?;
+        // Calculate byte range for this column
+        let start = slice.offset as usize;
+        let end = start + slice.length as usize;
+
+        // Validate range
+        if end > self.buffer.len() {
+            return Err(TypeError::TypeMismatch {
+                expected: "valid byte range",
+                actual: format!("range {}..{} exceeds buffer length {}", start, end, self.buffer.len()),
+            });
+        }
 
         // Convert column metadata to TypeInfo for the decode module
         let type_info = column.to_type_info();
 
-        // Create a Bytes buffer from the slice for decode_value
-        let mut buf = Bytes::copy_from_slice(bytes);
+        // Use zero-copy slice of the buffer instead of allocating
+        // This avoids the overhead of Bytes::copy_from_slice
+        let mut buf = self.buffer.slice(start..end);
 
         // Use the unified decode module for efficient parsing
         decode_value(&mut buf, &type_info)

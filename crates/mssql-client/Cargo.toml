@@ -13,7 +13,7 @@ categories = ["database", "asynchronous"]
 default = ["chrono", "uuid", "decimal"]
 chrono = ["mssql-types/chrono", "dep:chrono"]
 uuid = ["mssql-types/uuid"]
-decimal = ["mssql-types/decimal"]
+decimal = ["mssql-types/decimal", "dep:rust_decimal"]
 json = ["mssql-types/json"]
 otel = [
     "dep:opentelemetry",
@@ -41,6 +41,9 @@ lru = { workspace = true }
 # Optional: chrono for date/time types
 chrono = { workspace = true, optional = true }
 
+# Optional: rust_decimal for DECIMAL/NUMERIC types
+rust_decimal = { workspace = true, optional = true }
+
 # Optional: OpenTelemetry integration
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
@@ -49,12 +52,26 @@ tracing-opentelemetry = { workspace = true, optional = true }
 [dev-dependencies]
 tokio-test = { workspace = true }
 mssql-derive = { workspace = true }
+mssql-driver-pool = { workspace = true }
 tracing-subscriber = "0.3"
 rust_decimal = { workspace = true }
+criterion = { workspace = true }
 
 [[example]]
 name = "basic"
 path = "examples/basic.rs"
+
+[[example]]
+name = "error_handling"
+path = "examples/error_handling.rs"
+
+[[example]]
+name = "connection_pool"
+path = "examples/connection_pool.rs"
+
+[[example]]
+name = "azure_sql"
+path = "examples/azure_sql.rs"
 
 [[example]]
 name = "transactions"
@@ -71,6 +88,10 @@ path = "examples/derive_macros.rs"
 [[example]]
 name = "streaming"
 path = "examples/streaming.rs"
+
+[[bench]]
+name = "client"
+harness = false
 
 [lints]
 workspace = true

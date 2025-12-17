@@ -308,6 +308,11 @@ pub struct Config {
     /// Whether to enable MARS (Multiple Active Result Sets).
     pub mars: bool,
 
+    /// Whether to require encryption (TLS).
+    /// When true, the connection will use TLS even if the server doesn't require it.
+    /// When false, encryption is used only if the server requires it.
+    pub encrypt: bool,
+
     /// Redirect handling configuration (for Azure SQL).
     pub redirect: RedirectConfig,
 
@@ -335,6 +340,7 @@ impl Default for Config {
             trust_server_certificate: false,
             instance: None,
             mars: false,
+            encrypt: true, // Default to encrypted for security
             redirect: RedirectConfig::default(),
             retry: RetryPolicy::default(),
             timeouts,
@@ -429,7 +435,21 @@ impl Config {
                         || value == "1";
                 }
                 "encrypt" => {
-                    config.strict_mode = value.eq_ignore_ascii_case("strict");
+                    // Handle encryption levels: strict, true, false, yes, no, 1, 0
+                    if value.eq_ignore_ascii_case("strict") {
+                        config.strict_mode = true;
+                        config.encrypt = true;
+                    } else if value.eq_ignore_ascii_case("true")
+                        || value.eq_ignore_ascii_case("yes")
+                        || value == "1"
+                    {
+                        config.encrypt = true;
+                    } else if value.eq_ignore_ascii_case("false")
+                        || value.eq_ignore_ascii_case("no")
+                        || value == "0"
+                    {
+                        config.encrypt = false;
+                    }
                 }
                 "multipleactiveresultsets" | "mars" => {
                     config.mars = value.eq_ignore_ascii_case("true")
@@ -510,6 +530,19 @@ impl Config {
     pub fn strict_mode(mut self, enabled: bool) -> Self {
         self.strict_mode = enabled;
         self.tls = self.tls.strict_mode(enabled);
+        self
+    }
+
+    /// Enable or disable TLS encryption.
+    ///
+    /// When `true` (default), the connection will use TLS encryption.
+    /// When `false`, encryption is used only if the server requires it.
+    ///
+    /// **Warning:** Disabling encryption is insecure and should only be
+    /// used for development/testing on trusted networks.
+    #[must_use]
+    pub fn encrypt(mut self, enabled: bool) -> Self {
+        self.encrypt = enabled;
         self
     }
 
