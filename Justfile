@@ -150,11 +150,21 @@ setup:
     # Check platform-specific dependencies
     printf '\n{{cyan}}Platform Dependencies ({{platform}}):{{reset}}\n'
     if [[ "{{platform}}" == "linux" ]]; then
+        LINUX_MISSING=0
         if pkg-config --exists krb5-gssapi 2>/dev/null; then
             printf '  {{green}}✓{{reset}} libkrb5-dev (Kerberos support)\n'
         else
             printf '  {{yellow}}○{{reset}} libkrb5-dev (needed for --all-features)\n'
-            printf '       Install: sudo apt-get install libkrb5-dev\n'
+            LINUX_MISSING=1
+        fi
+        if command -v llvm-config &> /dev/null || [ -f /usr/lib/llvm-*/lib/libclang.so ]; then
+            printf '  {{green}}✓{{reset}} libclang-dev (bindgen support)\n'
+        else
+            printf '  {{yellow}}○{{reset}} libclang-dev (needed for --all-features)\n'
+            LINUX_MISSING=1
+        fi
+        if [[ $LINUX_MISSING -eq 1 ]]; then
+            printf '       Install: sudo apt-get install libkrb5-dev libclang-dev\n'
         fi
     else
         printf '  {{green}}✓{{reset}} No additional dependencies needed\n'
@@ -177,9 +187,11 @@ setup-linux:
         printf '{{yellow}}[WARN]{{reset}} This command is for Linux only\n'
         exit 0
     fi
-    printf '{{cyan}}[INFO]{{reset}} Installing libkrb5-dev for Kerberos support...\n'
-    sudo apt-get update && sudo apt-get install -y libkrb5-dev
-    printf '{{green}}[OK]{{reset}}   libkrb5-dev installed\n'
+    printf '{{cyan}}[INFO]{{reset}} Installing dependencies for Kerberos support...\n'
+    printf '{{cyan}}[INFO]{{reset}} - libkrb5-dev: Kerberos/GSSAPI headers\n'
+    printf '{{cyan}}[INFO]{{reset}} - libclang-dev: Required for bindgen (FFI generation)\n'
+    sudo apt-get update && sudo apt-get install -y libkrb5-dev libclang-dev
+    printf '{{green}}[OK]{{reset}}   Linux dependencies installed\n'
 
 [group('setup')]
 [doc("Install recommended cargo extensions (version-pinned for Rust 1.85)")]

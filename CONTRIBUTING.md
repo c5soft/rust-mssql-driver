@@ -94,16 +94,20 @@ For `--all-features` (integrated authentication):
 
 ```bash
 # Debian/Ubuntu
-sudo apt-get install libkrb5-dev
+sudo apt-get install libkrb5-dev libclang-dev
 
 # RHEL/Fedora
-sudo dnf install krb5-devel
+sudo dnf install krb5-devel clang-devel
 
 # Or use the just recipe
 just setup-linux
 ```
 
-The `integrated-auth` feature requires `libkrb5-dev` headers and is **Linux-only**.
+The `integrated-auth` feature requires:
+- `libkrb5-dev`: Kerberos/GSSAPI headers
+- `libclang-dev`: Required by bindgen to generate FFI bindings
+
+This is **Linux-only**.
 
 ### Justfile Recipe Naming Convention
 
