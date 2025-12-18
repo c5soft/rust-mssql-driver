@@ -123,9 +123,8 @@ jobs:
   semver:
     name: Semver Check
     runs-on: ubuntu-latest
-    # Skip semver check until crates are published to crates.io
-    # Re-enable after v0.1.0 release
-    if: false && github.event_name == 'pull_request'
+    # Only run on PRs to catch breaking changes before merge
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
         with:

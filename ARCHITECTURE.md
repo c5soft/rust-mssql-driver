@@ -700,7 +700,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/example/mssql-driver"
+repository = "https://github.com/praxiomlabs/rust-mssql-driver"
 
 [workspace.dependencies]
 # Async runtime
