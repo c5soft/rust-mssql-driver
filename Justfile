@@ -1356,8 +1356,21 @@ metadata-check:
     printf '{{green}}[OK]{{reset}}   Metadata check passed\n'
 
 [group('release')]
+[doc("Run typos spell checker")]
+typos:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{cyan}}[INFO]{{reset}} Running typos spell checker...\n'
+    if ! command -v typos &> /dev/null; then
+        printf '{{yellow}}[WARN]{{reset}} typos not installed (cargo install typos-cli)\n'
+        exit 0
+    fi
+    typos crates/ docs/ README.md CHANGELOG.md RELEASING.md ARCHITECTURE.md
+    printf '{{green}}[OK]{{reset}}   Typos check passed\n'
+
+[group('release')]
 [doc("Prepare for release (full validation)")]
-release-check: ci-release wip-check panic-audit metadata-check url-check
+release-check: ci-release wip-check panic-audit version-sync typos machete metadata-check url-check
     #!/usr/bin/env bash
     set -euo pipefail
     printf '\n{{bold}}{{blue}}══════ Release Validation ══════{{reset}}\n\n'
@@ -1393,6 +1406,49 @@ publish-dry:
     {{cargo}} publish --dry-run -p mssql-driver-pool
     {{cargo}} publish --dry-run -p mssql-testing
     printf '{{green}}[OK]{{reset}}   Dry run complete\n'
+
+[group('release')]
+[confirm("This will publish to crates.io. This action is IRREVERSIBLE. Continue?")]
+[doc("Publish all crates to crates.io in dependency order")]
+publish:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{cyan}}[INFO]{{reset}} Publishing to crates.io in dependency order...\n'
+    printf '{{cyan}}[INFO]{{reset}} Note: 30s delays between tiers for index propagation\n\n'
+
+    # Tier 0: Independent crates
+    printf '{{bold}}Tier 0: Independent crates{{reset}}\n'
+    {{cargo}} publish -p tds-protocol
+    {{cargo}} publish -p mssql-types
+    printf '{{cyan}}[INFO]{{reset}} Waiting 30s for index propagation...\n'
+    sleep 30
+
+    # Tier 1: Depend on tds-protocol
+    printf '{{bold}}Tier 1: Protocol-dependent crates{{reset}}\n'
+    {{cargo}} publish -p mssql-tls
+    {{cargo}} publish -p mssql-codec
+    {{cargo}} publish -p mssql-auth
+    printf '{{cyan}}[INFO]{{reset}} Waiting 30s for index propagation...\n'
+    sleep 30
+
+    # Tier 2: Proc-macro (no internal runtime deps)
+    printf '{{bold}}Tier 2: Proc-macro crate{{reset}}\n'
+    {{cargo}} publish -p mssql-derive
+    printf '{{cyan}}[INFO]{{reset}} Waiting 30s for index propagation...\n'
+    sleep 30
+
+    # Tier 3: Main client
+    printf '{{bold}}Tier 3: Main client crate{{reset}}\n'
+    {{cargo}} publish -p mssql-client
+    printf '{{cyan}}[INFO]{{reset}} Waiting 30s for index propagation...\n'
+    sleep 30
+
+    # Tier 4: Depend on mssql-client
+    printf '{{bold}}Tier 4: Client-dependent crates{{reset}}\n'
+    {{cargo}} publish -p mssql-driver-pool
+    {{cargo}} publish -p mssql-testing
+
+    printf '\n{{green}}[OK]{{reset}}   All crates published successfully\n'
 
 [group('release')]
 [doc("Validate dependency graph for publishing")]

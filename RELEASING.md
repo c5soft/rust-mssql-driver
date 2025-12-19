@@ -128,11 +128,13 @@ just release-check  # Comprehensive validation
 just wip-check      # TODO/FIXME/XXX/HACK, todo!/unimplemented!
 just panic-audit    # .unwrap()/.expect() audit
 just clippy-all     # Warnings-as-errors
+just typos          # Spell checking
 ```
 
 - [ ] No blocking `todo!()` or `unimplemented!()` in production code
 - [ ] All `.unwrap()` and `.expect()` calls reviewed for safety
 - [ ] No clippy warnings
+- [ ] No typos in code or documentation
 
 ### 2. Version Consistency
 
@@ -411,6 +413,7 @@ The following checks are **automated in CI**:
 | Pre-flight | `just release-check` | Full validation + git state |
 | Code hygiene | `just wip-check` | TODO/FIXME/todo!/unimplemented! |
 | Code hygiene | `just panic-audit` | .unwrap()/.expect() audit |
+| Code hygiene | `just typos` | Spell checking |
 | Version sync | `just version-sync` | README version matches Cargo.toml |
 | Security | `just deny` | Licenses, bans, advisories |
 | Security | `just audit` | Vulnerability scan |
@@ -419,6 +422,7 @@ The following checks are **automated in CI**:
 | Semver | `just semver` | Breaking change detection |
 | MSRV | `just msrv-check` | Compile with declared MSRV |
 | Publishing | `just publish-dry` | Dry-run all 9 crates |
+| Publishing | `just publish` | Publish all crates (with confirmation) |
 | Publishing | `just metadata-check` | crates.io metadata |
 | Publishing | `just url-check` | Repository URLs |
 | Publishing | `just dep-graph` | Dependency tier visualization |
