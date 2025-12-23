@@ -11,7 +11,8 @@ categories = ["authentication", "database"]
 
 [features]
 default = []
-azure-identity = []
+# Azure Managed Identity and Service Principal authentication
+azure-identity = ["dep:azure_identity", "dep:azure_core", "dep:time"]
 # Integrated authentication (Kerberos/SPNEGO) - Linux only
 # Requires libkrb5-dev on Debian/Ubuntu or krb5-devel on RHEL/Fedora
 integrated-auth = ["dep:libgssapi"]
@@ -24,6 +25,12 @@ tds-protocol = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 bytes = { workspace = true }
+async-trait = { workspace = true }
+
+# Optional: Azure authentication (Managed Identity, Service Principal)
+azure_identity = { workspace = true, optional = true }
+azure_core = { workspace = true, optional = true }
+time = { version = "0.3", optional = true }
 
 # Optional: Integrated authentication (Kerberos/SPNEGO)
 libgssapi = { version = "0.9", optional = true }
