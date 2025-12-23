@@ -22,6 +22,8 @@ otel = [
 ]
 # Secure credential handling with automatic memory zeroization
 zeroize = ["mssql-auth/zeroize"]
+# Always Encrypted client-side encryption support
+always-encrypted = ["mssql-auth/always-encrypted"]
 
 [dependencies]
 tds-protocol = { workspace = true }
@@ -60,6 +62,10 @@ rust_decimal = { workspace = true }
 criterion = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+# Always Encrypted test dependencies
+rsa = { version = "0.9", features = ["sha2"] }
+sha2 = "0.10"
+rand = "0.8"
 
 [[example]]
 name = "basic"
