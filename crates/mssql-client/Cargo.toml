@@ -20,6 +20,8 @@ otel = [
     "dep:opentelemetry_sdk",
     "dep:tracing-opentelemetry",
 ]
+# Secure credential handling with automatic memory zeroization
+zeroize = ["mssql-auth/zeroize"]
 
 [dependencies]
 tds-protocol = { workspace = true }

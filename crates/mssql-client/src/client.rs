@@ -2011,6 +2011,43 @@ impl Client<Ready> {
         Ok(QueryStream::new(columns, rows))
     }
 
+    /// Execute a query with a specific timeout.
+    ///
+    /// This overrides the default `command_timeout` from the connection configuration
+    /// for this specific query. If the query does not complete within the specified
+    /// duration, an error is returned.
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - The SQL query to execute
+    /// * `params` - Query parameters
+    /// * `timeout_duration` - Maximum time to wait for the query to complete
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::time::Duration;
+    ///
+    /// // Execute with a 5-second timeout
+    /// let rows = client
+    ///     .query_with_timeout(
+    ///         "SELECT * FROM large_table",
+    ///         &[],
+    ///         Duration::from_secs(5),
+    ///     )
+    ///     .await?;
+    /// ```
+    pub async fn query_with_timeout<'a>(
+        &'a mut self,
+        sql: &str,
+        params: &[&(dyn crate::ToSql + Sync)],
+        timeout_duration: std::time::Duration,
+    ) -> Result<QueryStream<'a>> {
+        timeout(timeout_duration, self.query(sql, params))
+            .await
+            .map_err(|_| Error::CommandTimeout)?
+    }
+
     /// Execute a batch that may return multiple result sets.
     ///
     /// This is useful for stored procedures or SQL batches that contain
@@ -2280,6 +2317,43 @@ impl Client<Ready> {
         result
     }
 
+    /// Execute a statement with a specific timeout.
+    ///
+    /// This overrides the default `command_timeout` from the connection configuration
+    /// for this specific statement. If the statement does not complete within the
+    /// specified duration, an error is returned.
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - The SQL statement to execute
+    /// * `params` - Statement parameters
+    /// * `timeout_duration` - Maximum time to wait for the statement to complete
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::time::Duration;
+    ///
+    /// // Execute with a 10-second timeout
+    /// let rows_affected = client
+    ///     .execute_with_timeout(
+    ///         "UPDATE large_table SET status = @p1",
+    ///         &[&"processed"],
+    ///         Duration::from_secs(10),
+    ///     )
+    ///     .await?;
+    /// ```
+    pub async fn execute_with_timeout(
+        &mut self,
+        sql: &str,
+        params: &[&(dyn crate::ToSql + Sync)],
+        timeout_duration: std::time::Duration,
+    ) -> Result<u64> {
+        timeout(timeout_duration, self.execute(sql, params))
+            .await
+            .map_err(|_| Error::CommandTimeout)?
+    }
+
     /// Begin a transaction.
     ///
     /// This transitions the client from `Ready` to `InTransaction` state.
@@ -2428,6 +2502,46 @@ impl Client<Ready> {
     pub fn port(&self) -> u16 {
         self.config.port
     }
+
+    /// Get a handle for cancelling the current query.
+    ///
+    /// The cancel handle can be cloned and sent to other tasks, enabling
+    /// cancellation of long-running queries from a separate async context.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::time::Duration;
+    ///
+    /// let cancel_handle = client.cancel_handle();
+    ///
+    /// // Spawn a task to cancel after 10 seconds
+    /// let handle = tokio::spawn(async move {
+    ///     tokio::time::sleep(Duration::from_secs(10)).await;
+    ///     let _ = cancel_handle.cancel().await;
+    /// });
+    ///
+    /// // This query will be cancelled if it runs longer than 10 seconds
+    /// let result = client.query("SELECT * FROM very_large_table", &[]).await;
+    /// ```
+    #[must_use]
+    pub fn cancel_handle(&self) -> crate::cancel::CancelHandle {
+        let connection = self
+            .connection
+            .as_ref()
+            .expect("connection should be present");
+        match connection {
+            ConnectionHandle::Tls(conn) => {
+                crate::cancel::CancelHandle::from_tls(conn.cancel_handle())
+            }
+            ConnectionHandle::TlsPrelogin(conn) => {
+                crate::cancel::CancelHandle::from_tls_prelogin(conn.cancel_handle())
+            }
+            ConnectionHandle::Plain(conn) => {
+                crate::cancel::CancelHandle::from_plain(conn.cancel_handle())
+            }
+        }
+    }
 }
 
 impl Client<InTransaction> {
@@ -2526,6 +2640,34 @@ impl Client<InTransaction> {
         drop(span);
 
         result
+    }
+
+    /// Execute a query within the transaction with a specific timeout.
+    ///
+    /// See [`Client<Ready>::query_with_timeout`] for details.
+    pub async fn query_with_timeout<'a>(
+        &'a mut self,
+        sql: &str,
+        params: &[&(dyn crate::ToSql + Sync)],
+        timeout_duration: std::time::Duration,
+    ) -> Result<QueryStream<'a>> {
+        timeout(timeout_duration, self.query(sql, params))
+            .await
+            .map_err(|_| Error::CommandTimeout)?
+    }
+
+    /// Execute a statement within the transaction with a specific timeout.
+    ///
+    /// See [`Client<Ready>::execute_with_timeout`] for details.
+    pub async fn execute_with_timeout(
+        &mut self,
+        sql: &str,
+        params: &[&(dyn crate::ToSql + Sync)],
+        timeout_duration: std::time::Duration,
+    ) -> Result<u64> {
+        timeout(timeout_duration, self.execute(sql, params))
+            .await
+            .map_err(|_| Error::CommandTimeout)?
     }
 
     /// Commit the transaction.
@@ -2682,6 +2824,28 @@ impl Client<InTransaction> {
         // This method exists for API completeness
         drop(savepoint);
         Ok(())
+    }
+
+    /// Get a handle for cancelling the current query within the transaction.
+    ///
+    /// See [`Client<Ready>::cancel_handle`] for usage examples.
+    #[must_use]
+    pub fn cancel_handle(&self) -> crate::cancel::CancelHandle {
+        let connection = self
+            .connection
+            .as_ref()
+            .expect("connection should be present");
+        match connection {
+            ConnectionHandle::Tls(conn) => {
+                crate::cancel::CancelHandle::from_tls(conn.cancel_handle())
+            }
+            ConnectionHandle::TlsPrelogin(conn) => {
+                crate::cancel::CancelHandle::from_tls_prelogin(conn.cancel_handle())
+            }
+            ConnectionHandle::Plain(conn) => {
+                crate::cancel::CancelHandle::from_plain(conn.cancel_handle())
+            }
+        }
     }
 }
 

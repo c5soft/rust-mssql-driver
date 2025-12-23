@@ -72,6 +72,7 @@
 
 pub mod blob;
 pub mod bulk;
+pub mod cancel;
 pub mod client;
 pub mod config;
 pub mod error;
@@ -88,11 +89,16 @@ pub mod tvp;
 
 // Re-export commonly used types
 pub use bulk::{BulkColumn, BulkInsert, BulkInsertBuilder, BulkInsertResult, BulkOptions};
+pub use cancel::CancelHandle;
 pub use client::Client;
 pub use config::{Config, RedirectConfig, RetryPolicy, TimeoutConfig};
 pub use error::Error;
 pub use from_row::{FromRow, MapRows, RowIteratorExt};
 pub use mssql_auth::Credentials;
+
+// Secure credential types (with zeroize feature)
+#[cfg(feature = "zeroize")]
+pub use mssql_auth::{SecretString, SecureCredentials};
 pub use mssql_types::{FromSql, SqlValue, ToSql};
 pub use query::Query;
 pub use row::{Column, Row};
