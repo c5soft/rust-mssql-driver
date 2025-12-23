@@ -6,56 +6,7 @@
 //! - String concatenation of values
 //! - Temporary tables
 //!
-//! ## Current Status: Planned for v0.2.0
-//!
-//! TVP support is **planned for a future release** (target: v0.2.0). The types in this
-//! module provide the foundation for TVP support, but attempting to use `TvpValue`
-//! as a query parameter will return an error until implementation is complete.
-//!
-//! ### Implementation Roadmap
-//!
-//! Full TVP support requires TDS-specific binary encoding (type 0xF3):
-//!
-//! 1. ✅ API types defined ([`Tvp`], [`TvpValue`], [`TvpColumn`], [`TvpRow`])
-//! 2. ⏳ `SqlValue::Tvp` variant in `mssql-types` crate
-//! 3. ⏳ TVP parameter metadata encoding in RPC requests
-//! 4. ⏳ TVP row data encoding per [MS-TDS specification]
-//! 5. ⏳ `#[derive(Tvp)]` proc macro in `mssql-derive`
-//!
-//! [MS-TDS specification]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-tds/c264db71-c1ec-4fe8-b5ef-19d54b1e6566
-//!
-//! ### Workarounds (v0.1.x)
-//!
-//! Until TVP is fully implemented, consider these alternatives:
-//!
-//! **1. Use a temporary table:**
-//! ```sql
-//! CREATE TABLE #UserIds (UserId INT);
-//! INSERT INTO #UserIds VALUES (1), (2), (3);
-//! SELECT * FROM Users WHERE UserId IN (SELECT UserId FROM #UserIds);
-//! ```
-//!
-//! **2. Use XML parameter:**
-//! ```rust,ignore
-//! let xml = "<ids><id>1</id><id>2</id><id>3</id></ids>";
-//! client.execute(
-//!     "SELECT * FROM Users WHERE UserId IN (SELECT x.value('.', 'INT') FROM @xml.nodes('/ids/id') AS T(x))",
-//!     &[&xml],
-//! ).await?;
-//! ```
-//!
-//! **3. Use JSON parameter (SQL Server 2016+):**
-//! ```rust,ignore
-//! let json = "[1, 2, 3]";
-//! client.execute(
-//!     "SELECT * FROM Users WHERE UserId IN (SELECT value FROM OPENJSON(@json))",
-//!     &[&json],
-//! ).await?;
-//! ```
-//!
-//! ## Planned Usage (Future)
-//!
-//! When TVP support is complete, the API will work as follows:
+//! ## Usage
 //!
 //! First, create a table type in SQL Server:
 //!
@@ -95,7 +46,7 @@
 //! - `#[mssql(type_name = "schema.TypeName")]` - SQL Server TVP type name (required)
 //! - `#[mssql(rename = "column_name")]` - Map field to different column name
 
-use mssql_types::{SqlValue, ToSql, TypeError};
+use mssql_types::{SqlValue, ToSql, TvpColumnDef, TvpColumnType, TvpData, TypeError};
 
 /// Metadata for a TVP column.
 #[derive(Debug, Clone)]
@@ -250,21 +201,44 @@ impl TvpValue {
 
 impl ToSql for TvpValue {
     fn to_sql(&self) -> Result<SqlValue, TypeError> {
-        // TVP encoding requires TDS-specific binary encoding (type_id 0xF3)
-        // that is not yet implemented. Full TVP support requires:
-        //
-        // 1. SqlValue::Tvp variant in mssql-types
-        // 2. TVP parameter metadata encoding in RPC requests
-        // 3. TVP row data encoding per MS-TDS specification
-        //
-        // This is tracked as a known limitation. For now, return an error
-        // rather than producing invalid SQL that would fail at runtime.
-        //
-        // Workaround: Use a temp table or XML parameter instead of TVP.
-        Err(TypeError::UnsupportedConversion {
-            from: "TvpValue".to_string(),
-            to: "SqlValue",
-        })
+        // Parse the type name to extract schema and type name
+        // Format: "schema.TypeName" or just "TypeName"
+        let (schema, type_name) = if let Some(dot_pos) = self.type_name.find('.') {
+            (
+                self.type_name[..dot_pos].to_string(),
+                self.type_name[dot_pos + 1..].to_string(),
+            )
+        } else {
+            (String::new(), self.type_name.clone())
+        };
+
+        // Convert TvpColumn to TvpColumnDef
+        let columns: Vec<TvpColumnDef> = self
+            .columns
+            .iter()
+            .map(|col| {
+                let column_type = TvpColumnType::from_sql_type(&col.sql_type).ok_or_else(|| {
+                    TypeError::UnsupportedConversion {
+                        from: col.sql_type.clone(),
+                        to: "TvpColumnType",
+                    }
+                })?;
+                Ok(TvpColumnDef::nullable(column_type))
+            })
+            .collect::<Result<Vec<_>, TypeError>>()?;
+
+        // Convert rows
+        let rows: Vec<Vec<SqlValue>> = self.rows.iter().map(|row| row.values.clone()).collect();
+
+        // Create TvpData
+        let tvp_data = TvpData {
+            schema,
+            type_name,
+            columns,
+            rows,
+        };
+
+        Ok(SqlValue::Tvp(Box::new(tvp_data)))
     }
 
     fn sql_type(&self) -> &'static str {

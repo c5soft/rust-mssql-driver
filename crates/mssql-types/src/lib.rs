@@ -39,6 +39,7 @@ pub mod encode;
 pub mod error;
 pub mod from_sql;
 pub mod to_sql;
+pub mod tvp;
 pub mod value;
 
 pub use decode::{Collation, TdsDecode, TypeInfo, decode_utf16_string, decode_value};
@@ -46,4 +47,5 @@ pub use encode::{TdsEncode, encode_utf16_string};
 pub use error::TypeError;
 pub use from_sql::FromSql;
 pub use to_sql::ToSql;
+pub use tvp::{TvpColumnDef, TvpColumnType, TvpData, TvpError};
 pub use value::SqlValue;

@@ -780,6 +780,14 @@ impl BulkInsert {
             SqlValue::Xml(x) => {
                 encode_nvarchar_value(x, buf)?;
             }
+
+            SqlValue::Tvp(_) => {
+                // TVPs are not valid in bulk copy operations - they're for RPC parameters only
+                return Err(TypeError::UnsupportedConversion {
+                    from: "TVP".to_string(),
+                    to: "bulk copy value",
+                });
+            }
         }
 
         Ok(())

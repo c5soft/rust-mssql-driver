@@ -75,6 +75,7 @@ pub mod bulk;
 pub mod cancel;
 pub mod client;
 pub mod config;
+pub mod encryption;
 pub mod error;
 pub mod from_row;
 pub mod instrumentation;
@@ -110,3 +111,15 @@ pub use stream::{ExecuteResult, MultiResultStream, OutputParam, QueryStream, Res
 pub use to_params::{NamedParam, ParamList, ToParams};
 pub use transaction::{IsolationLevel, SavePoint, Transaction};
 pub use tvp::{Tvp, TvpColumn, TvpRow, TvpValue};
+
+// Always Encrypted types
+#[cfg(feature = "always-encrypted")]
+pub use encryption::EncryptionContext;
+pub use encryption::{
+    EncryptionConfig, ParameterCryptoInfo, ParameterEncryptionInfo, ResultSetEncryptionInfo,
+};
+
+// OpenTelemetry instrumentation (available whether or not otel feature is enabled)
+pub use instrumentation::{
+    DatabaseMetrics, OperationTimer, SanitizationConfig, attributes, metric_names, span_names,
+};

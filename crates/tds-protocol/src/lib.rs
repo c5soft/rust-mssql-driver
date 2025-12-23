@@ -40,6 +40,7 @@
 extern crate alloc;
 
 pub mod codec;
+pub mod crypto;
 pub mod error;
 pub mod login7;
 pub mod packet;
@@ -47,6 +48,7 @@ pub mod prelogin;
 pub mod rpc;
 pub mod sql_batch;
 pub mod token;
+pub mod tvp;
 pub mod types;
 pub mod version;
 
@@ -67,5 +69,19 @@ pub use token::{
     ReturnValue, ServerError, ServerInfo, SessionState, SspiToken, Token, TokenParser, TokenType,
     TypeInfo,
 };
+pub use tvp::{
+    TVP_END_TOKEN, TVP_ROW_TOKEN, TVP_TYPE_ID, TvpColumnDef as TvpWireColumnDef, TvpColumnFlags,
+    TvpEncoder, TvpWireType, encode_tvp_bit, encode_tvp_date, encode_tvp_datetime2,
+    encode_tvp_decimal, encode_tvp_float, encode_tvp_guid, encode_tvp_int, encode_tvp_null,
+    encode_tvp_nvarchar, encode_tvp_time, encode_tvp_varbinary,
+};
 pub use types::{ColumnFlags, TypeId, Updateable};
 pub use version::TdsVersion;
+
+// Always Encrypted metadata types
+pub use crypto::{
+    ALGORITHM_AEAD_AES_256_CBC_HMAC_SHA256, COLUMN_FLAG_ENCRYPTED, CekTable, CekTableEntry,
+    CekValue, ColumnCryptoInfo, CryptoMetadata, ENCRYPTION_TYPE_DETERMINISTIC,
+    ENCRYPTION_TYPE_RANDOMIZED, EncryptionTypeWire, NORMALIZATION_RULE_VERSION,
+    is_column_encrypted,
+};

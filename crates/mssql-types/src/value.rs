@@ -2,6 +2,8 @@
 
 use bytes::Bytes;
 
+use crate::tvp::TvpData;
+
 /// A SQL value that can represent any SQL Server data type.
 ///
 /// This enum provides a type-safe way to handle SQL values that may be
@@ -51,6 +53,11 @@ pub enum SqlValue {
     Json(serde_json::Value),
     /// XML value (XML type).
     Xml(String),
+    /// Table-Valued Parameter (TVP).
+    ///
+    /// TVPs allow passing collections of structured data to SQL Server stored
+    /// procedures. Boxed due to large size.
+    Tvp(Box<TvpData>),
 }
 
 impl SqlValue {
@@ -150,6 +157,16 @@ impl SqlValue {
             #[cfg(feature = "json")]
             Self::Json(_) => "JSON",
             Self::Xml(_) => "XML",
+            Self::Tvp(_) => "TVP",
+        }
+    }
+
+    /// Get the value as a TVP, if it is one.
+    #[must_use]
+    pub fn as_tvp(&self) -> Option<&TvpData> {
+        match self {
+            Self::Tvp(v) => Some(v),
+            _ => None,
         }
     }
 }
@@ -246,5 +263,11 @@ impl From<chrono::NaiveDateTime> for SqlValue {
 impl From<serde_json::Value> for SqlValue {
     fn from(v: serde_json::Value) -> Self {
         Self::Json(v)
+    }
+}
+
+impl From<TvpData> for SqlValue {
+    fn from(v: TvpData) -> Self {
+        Self::Tvp(Box::new(v))
     }
 }

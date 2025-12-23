@@ -115,6 +115,16 @@ impl TdsEncode for SqlValue {
                 encode_utf16_string(x, buf);
                 Ok(())
             }
+            SqlValue::Tvp(_) => {
+                // TVP encoding is handled at the RPC parameter level, not here.
+                // This method is for encoding the value data portion; TVPs have
+                // their own complex encoding structure that includes metadata.
+                // See tds-protocol crate for full TVP encoding.
+                Err(TypeError::UnsupportedConversion {
+                    from: "TvpData".to_string(),
+                    to: "raw bytes (use RPC parameter encoding)",
+                })
+            }
         }
     }
 
@@ -145,6 +155,7 @@ impl TdsEncode for SqlValue {
             #[cfg(feature = "json")]
             SqlValue::Json(_) => 0xE7, // NVARCHARTYPE (JSON as string)
             SqlValue::Xml(_) => 0xF1,      // XMLTYPE
+            SqlValue::Tvp(_) => 0xF3,      // TVPTYPE
         }
     }
 }
