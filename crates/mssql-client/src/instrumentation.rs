@@ -381,6 +381,261 @@ impl InstrumentationContext {
     }
 }
 
+// =============================================================================
+// OpenTelemetry Metrics Support
+// =============================================================================
+
+/// Metric names following OpenTelemetry semantic conventions.
+pub mod metric_names {
+    /// Gauge: Number of connections currently in use.
+    pub const DB_CLIENT_CONNECTIONS_USAGE: &str = "db.client.connections.usage";
+    /// Gauge: Number of idle connections in the pool.
+    pub const DB_CLIENT_CONNECTIONS_IDLE: &str = "db.client.connections.idle";
+    /// Gauge: Maximum connections allowed in the pool.
+    pub const DB_CLIENT_CONNECTIONS_MAX: &str = "db.client.connections.max";
+    /// Counter: Total number of connections created.
+    pub const DB_CLIENT_CONNECTIONS_CREATE_TOTAL: &str = "db.client.connections.create.total";
+    /// Counter: Total number of connections closed.
+    pub const DB_CLIENT_CONNECTIONS_CLOSE_TOTAL: &str = "db.client.connections.close.total";
+    /// Histogram: Duration of database operations (queries, executes).
+    pub const DB_CLIENT_OPERATION_DURATION: &str = "db.client.operation.duration";
+    /// Counter: Total number of operations performed.
+    pub const DB_CLIENT_OPERATIONS_TOTAL: &str = "db.client.operations.total";
+    /// Counter: Total number of operation errors.
+    pub const DB_CLIENT_ERRORS_TOTAL: &str = "db.client.errors.total";
+    /// Histogram: Time spent waiting for a connection from the pool.
+    pub const DB_CLIENT_CONNECTIONS_WAIT_TIME: &str = "db.client.connections.wait_time";
+}
+
+/// Database metrics collector using OpenTelemetry.
+#[cfg(feature = "otel")]
+pub struct DatabaseMetrics {
+    /// Connection usage gauge.
+    connections_usage: opentelemetry::metrics::Gauge<u64>,
+    /// Idle connections gauge.
+    connections_idle: opentelemetry::metrics::Gauge<u64>,
+    /// Max connections gauge.
+    connections_max: opentelemetry::metrics::Gauge<u64>,
+    /// Connections created counter.
+    connections_create_total: opentelemetry::metrics::Counter<u64>,
+    /// Connections closed counter.
+    connections_close_total: opentelemetry::metrics::Counter<u64>,
+    /// Operation duration histogram.
+    operation_duration: opentelemetry::metrics::Histogram<f64>,
+    /// Total operations counter.
+    operations_total: opentelemetry::metrics::Counter<u64>,
+    /// Error counter.
+    errors_total: opentelemetry::metrics::Counter<u64>,
+    /// Connection wait time histogram.
+    connections_wait_time: opentelemetry::metrics::Histogram<f64>,
+    /// Base attributes for all metrics.
+    base_attributes: Vec<opentelemetry::KeyValue>,
+}
+
+#[cfg(feature = "otel")]
+impl DatabaseMetrics {
+    /// Create a new metrics collector.
+    ///
+    /// # Arguments
+    ///
+    /// * `pool_name` - Optional name to identify this pool in metrics
+    /// * `server_address` - Server hostname
+    /// * `server_port` - Server port
+    pub fn new(pool_name: Option<&str>, server_address: &str, server_port: u16) -> Self {
+        use opentelemetry::{KeyValue, global};
+
+        let meter = global::meter("mssql-client");
+
+        let connections_usage = meter
+            .u64_gauge(metric_names::DB_CLIENT_CONNECTIONS_USAGE)
+            .with_description("Number of connections currently in use")
+            .with_unit("connections")
+            .build();
+
+        let connections_idle = meter
+            .u64_gauge(metric_names::DB_CLIENT_CONNECTIONS_IDLE)
+            .with_description("Number of idle connections available")
+            .with_unit("connections")
+            .build();
+
+        let connections_max = meter
+            .u64_gauge(metric_names::DB_CLIENT_CONNECTIONS_MAX)
+            .with_description("Maximum number of connections allowed")
+            .with_unit("connections")
+            .build();
+
+        let connections_create_total = meter
+            .u64_counter(metric_names::DB_CLIENT_CONNECTIONS_CREATE_TOTAL)
+            .with_description("Total number of connections created")
+            .with_unit("connections")
+            .build();
+
+        let connections_close_total = meter
+            .u64_counter(metric_names::DB_CLIENT_CONNECTIONS_CLOSE_TOTAL)
+            .with_description("Total number of connections closed")
+            .with_unit("connections")
+            .build();
+
+        let operation_duration = meter
+            .f64_histogram(metric_names::DB_CLIENT_OPERATION_DURATION)
+            .with_description("Duration of database operations")
+            .with_unit("s")
+            .build();
+
+        let operations_total = meter
+            .u64_counter(metric_names::DB_CLIENT_OPERATIONS_TOTAL)
+            .with_description("Total number of database operations")
+            .with_unit("operations")
+            .build();
+
+        let errors_total = meter
+            .u64_counter(metric_names::DB_CLIENT_ERRORS_TOTAL)
+            .with_description("Total number of operation errors")
+            .with_unit("errors")
+            .build();
+
+        let connections_wait_time = meter
+            .f64_histogram(metric_names::DB_CLIENT_CONNECTIONS_WAIT_TIME)
+            .with_description("Time spent waiting for a connection")
+            .with_unit("s")
+            .build();
+
+        let mut base_attributes = vec![
+            KeyValue::new(attributes::DB_SYSTEM, DB_SYSTEM),
+            KeyValue::new(attributes::SERVER_ADDRESS, server_address.to_string()),
+            KeyValue::new(attributes::SERVER_PORT, i64::from(server_port)),
+        ];
+
+        if let Some(name) = pool_name {
+            base_attributes.push(KeyValue::new("db.client.pool.name", name.to_string()));
+        }
+
+        Self {
+            connections_usage,
+            connections_idle,
+            connections_max,
+            connections_create_total,
+            connections_close_total,
+            operation_duration,
+            operations_total,
+            errors_total,
+            connections_wait_time,
+            base_attributes,
+        }
+    }
+
+    /// Record pool connection status.
+    pub fn record_pool_status(&self, in_use: u64, idle: u64, max: u64) {
+        self.connections_usage.record(in_use, &self.base_attributes);
+        self.connections_idle.record(idle, &self.base_attributes);
+        self.connections_max.record(max, &self.base_attributes);
+    }
+
+    /// Record a connection being created.
+    pub fn record_connection_created(&self) {
+        self.connections_create_total.add(1, &self.base_attributes);
+    }
+
+    /// Record a connection being closed.
+    pub fn record_connection_closed(&self) {
+        self.connections_close_total.add(1, &self.base_attributes);
+    }
+
+    /// Record an operation duration.
+    pub fn record_operation(&self, operation: &str, duration_seconds: f64, success: bool) {
+        use opentelemetry::KeyValue;
+
+        let mut attrs = self.base_attributes.clone();
+        attrs.push(KeyValue::new(
+            attributes::DB_OPERATION,
+            operation.to_string(),
+        ));
+        attrs.push(KeyValue::new("db.operation.success", success));
+
+        self.operations_total.add(1, &attrs);
+        self.operation_duration.record(duration_seconds, &attrs);
+
+        if !success {
+            self.errors_total.add(1, &attrs);
+        }
+    }
+
+    /// Record time spent waiting for a connection from the pool.
+    pub fn record_connection_wait(&self, duration_seconds: f64) {
+        self.connections_wait_time
+            .record(duration_seconds, &self.base_attributes);
+    }
+}
+
+/// No-op metrics collector when otel feature is disabled.
+#[cfg(not(feature = "otel"))]
+#[derive(Debug, Clone, Default)]
+pub struct DatabaseMetrics;
+
+#[cfg(not(feature = "otel"))]
+impl DatabaseMetrics {
+    /// Create a new no-op metrics collector.
+    #[must_use]
+    pub fn new(_pool_name: Option<&str>, _server_address: &str, _server_port: u16) -> Self {
+        Self
+    }
+
+    /// Record pool status (no-op).
+    pub fn record_pool_status(&self, _in_use: u64, _idle: u64, _max: u64) {}
+
+    /// Record connection created (no-op).
+    pub fn record_connection_created(&self) {}
+
+    /// Record connection closed (no-op).
+    pub fn record_connection_closed(&self) {}
+
+    /// Record operation (no-op).
+    pub fn record_operation(&self, _operation: &str, _duration_seconds: f64, _success: bool) {}
+
+    /// Record connection wait time (no-op).
+    pub fn record_connection_wait(&self, _duration_seconds: f64) {}
+}
+
+/// Helper for timing operations.
+#[derive(Debug, Clone)]
+pub struct OperationTimer {
+    start: std::time::Instant,
+    operation: &'static str,
+}
+
+impl OperationTimer {
+    /// Start timing an operation.
+    #[must_use]
+    pub fn start(operation: &'static str) -> Self {
+        Self {
+            start: std::time::Instant::now(),
+            operation,
+        }
+    }
+
+    /// Get the elapsed time in seconds.
+    #[must_use]
+    pub fn elapsed_seconds(&self) -> f64 {
+        self.start.elapsed().as_secs_f64()
+    }
+
+    /// Get the operation name.
+    #[must_use]
+    pub fn operation(&self) -> &'static str {
+        self.operation
+    }
+
+    /// Finish timing and record the metric.
+    #[cfg(feature = "otel")]
+    pub fn finish(self, metrics: &DatabaseMetrics, success: bool) {
+        metrics.record_operation(self.operation, self.elapsed_seconds(), success);
+    }
+
+    /// Finish timing (no-op when otel is disabled).
+    #[cfg(not(feature = "otel"))]
+    pub fn finish(self, _metrics: &DatabaseMetrics, _success: bool) {}
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
