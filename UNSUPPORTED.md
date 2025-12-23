@@ -60,13 +60,224 @@ The following features are intentionally not planned for implementation:
 
 **Alternative:** Use TCP/IP connections (the default).
 
-### 6. Linked Servers / Distributed Queries
+### 6. Shared Memory Transport
+
+**Status:** Not Planned
+
+**Rationale:** Shared memory transport is:
+- Windows-only (localhost connections)
+- Undocumented in the public TDS specification
+- Limited to same-machine scenarios where TCP/IP localhost works equally well
+
+**Alternative:** Use TCP/IP connections to `localhost` or `127.0.0.1`.
+
+### 7. Linked Servers / Distributed Queries
 
 **Status:** Not Planned (Driver-Level)
 
 **Rationale:** Linked server queries work at the SQL Server level, not the driver level. The driver executes whatever SQL you send.
 
 **Alternative:** Your queries can use linked servers - the driver doesn't need special support.
+
+---
+
+## Unsupported Data Types
+
+The following SQL Server data types are not currently supported:
+
+### Spatial Types
+
+| Type | Status | Rationale |
+|------|--------|-----------|
+| `GEOMETRY` | Not Supported | Complex binary format, requires geometric computation library |
+| `GEOGRAPHY` | Not Supported | Complex binary format, requires geodetic computation library |
+
+**Workaround:** Convert to WKT (Well-Known Text) or GeoJSON in SQL:
+
+```sql
+-- Return as WKT string
+SELECT Location.STAsText() AS LocationWkt FROM Places;
+
+-- Return as GeoJSON (SQL Server 2016+)
+SELECT Location.STAsGeoJSON() AS LocationJson FROM Places;
+```
+
+### Hierarchical Types
+
+| Type | Status | Rationale |
+|------|--------|-----------|
+| `HIERARCHYID` | Not Supported | Proprietary binary format with complex path operations |
+
+**Workaround:** Convert to string representation in SQL:
+
+```sql
+SELECT OrgNode.ToString() AS OrgPath FROM OrgChart;
+```
+
+### User-Defined Types (UDT)
+
+| Type | Status | Rationale |
+|------|--------|-----------|
+| CLR UDTs | Not Supported | Requires .NET CLR integration and type metadata |
+| Alias Types | Supported | Treated as their underlying base type |
+
+**Workaround:** Convert UDTs to standard types in your queries.
+
+### Sparse Columns
+
+**Status:** Partial Support
+
+Sparse columns are returned with their base data type. The `COLUMN_SET` XML representation is not automatically generated.
+
+**Workaround:** Query the column set explicitly if needed:
+
+```sql
+SELECT *, SparseColumnSet FROM TableWithSparseColumns;
+```
+
+---
+
+## Platform Limitations
+
+### SQL Server Express LocalDB
+
+**Status:** Not Tested
+
+LocalDB uses a different connection mechanism (automatic instance management via Windows named pipes). While TCP/IP connections to LocalDB may work, this configuration is not tested.
+
+**Alternative:** Use a full SQL Server Express instance with TCP/IP enabled, or use Docker containers for local development.
+
+### 32-bit Platforms
+
+**Status:** Not Supported
+
+The driver is only tested on 64-bit platforms (x86_64, aarch64). 32-bit builds may work but are not part of the CI matrix.
+
+**Rationale:** 32-bit systems are increasingly rare in production environments, and testing resources are limited.
+
+---
+
+## Connection Pool Limitations
+
+### Thread Sharing
+
+**Status:** Not Supported
+
+`Client<S>` is single-owner by design. Connections cannot be shared between tasks without explicit synchronization.
+
+**Rationale:** This simplifies the state machine and prevents race conditions in query execution.
+
+**Alternative:** Use `Pool` to manage multiple connections, acquiring one per task as needed.
+
+### Pool Metrics/Instrumentation
+
+**Status:** Basic Only
+
+The pool exposes basic metrics (size, available connections) but not detailed instrumentation.
+
+| Metric | Status |
+|--------|--------|
+| Pool size | Available |
+| Available connections | Available |
+| Wait queue depth | Not Exposed |
+| Connection acquisition time histogram | Not Exposed |
+| Connection lifetime histogram | Not Exposed |
+
+**Planned:** OpenTelemetry metrics integration is planned for v0.2.0.
+
+### TTL-Based Connection Expiration
+
+**Status:** Not Supported
+
+Connections are evicted based on LRU (Least Recently Used) policy, not time-based expiration.
+
+**Rationale:** LRU provides a good balance between connection reuse and resource cleanup without the complexity of background timers.
+
+**Alternative:** If you need to force connection refresh, reduce the pool size or periodically recycle the pool.
+
+### Custom Health Checks
+
+**Status:** Not Supported
+
+The pool uses a hardcoded `SELECT 1` query for health checks. Custom health check logic is not supported.
+
+**Rationale:** `SELECT 1` is sufficient for connection liveness and doesn't require database-specific knowledge.
+
+---
+
+## Statement Cache Limitations
+
+### Cross-Connection Statement Sharing
+
+**Status:** Not Supported (By Design)
+
+Prepared statement handles are connection-specific in SQL Server. Each connection maintains its own LRU statement cache.
+
+**Rationale:** Sharing would require complex coordination and could lead to race conditions.
+
+### TTL-Based Statement Expiration
+
+**Status:** Not Supported
+
+Cached statements are evicted based on LRU policy, not time-based expiration.
+
+**Rationale:** LRU naturally evicts stale statements as new ones are prepared. Time-based expiration adds complexity without significant benefit.
+
+---
+
+## Administrative Features
+
+The following administrative and diagnostic features are not directly exposed:
+
+### Extended Events Integration
+
+**Status:** Not Supported
+
+There is no API for programmatic Extended Events session management.
+
+**Workaround:** Use SQL commands to manage Extended Events sessions:
+
+```sql
+CREATE EVENT SESSION [MySession] ON SERVER ...
+```
+
+### Query Plan Retrieval
+
+**Status:** Not Exposed
+
+There is no direct API to retrieve query plans.
+
+**Workaround:** Use SHOWPLAN options:
+
+```sql
+SET SHOWPLAN_XML ON;
+-- Your query here
+SET SHOWPLAN_XML OFF;
+```
+
+Or query the plan cache:
+
+```sql
+SELECT query_plan FROM sys.dm_exec_query_plan(plan_handle);
+```
+
+### Login Retry/Backoff Configuration
+
+**Status:** Basic Only
+
+Connection retry uses a simple fixed policy. Exponential backoff with jitter is not configurable.
+
+**Planned:** Consider using a retry middleware or implementing custom retry logic in your application.
+
+### Circuit Breaker Pattern
+
+**Status:** Not Implemented
+
+There is no built-in circuit breaker for failing connections.
+
+**Alternative:** Implement circuit breaker logic in your application using crates like `failsafe` or `backoff`.
+
+---
 
 ## Features Planned for Future Releases
 
@@ -109,6 +320,8 @@ Until Always Encrypted is implemented:
 - Use Transparent Data Encryption (TDE) for data-at-rest protection
 - **Do NOT use `ENCRYPTBYKEY`** as a workaround - it does not provide the same security guarantees (keys are accessible to DBAs)
 
+---
+
 ## Protocol Limitations
 
 ### Large Object (LOB) Streaming
@@ -131,6 +344,8 @@ SELECT SUBSTRING(Data, @offset, @length) FROM Documents WHERE Id = @id;
 Server-side cursors are not directly supported. However:
 - Result set streaming is supported and efficient
 - For large datasets, consider pagination with `OFFSET`/`FETCH`
+
+---
 
 ## Why Not Support X?
 
