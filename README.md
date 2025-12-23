@@ -29,10 +29,12 @@ A high-performance, async Microsoft SQL Server driver for Rust.
 | Bulk Insert | ✅ | High-performance batch loading |
 | `#[derive(FromRow)]` | ✅ | Row-to-struct mapping |
 | TDS 8.0 Strict Mode | ✅ | SQL Server 2022+ |
-| Azure Managed Identity | ⏳ | Planned for v0.2 |
-| Kerberos/NTLM | ⏳ | Planned for v0.2 |
-| Table-Valued Parameters | ⏳ | Planned for v0.2 |
-| Always Encrypted | ⏳ | Planned for v0.3+ |
+| Azure Managed Identity | ✅ | Via `azure-identity` |
+| Kerberos/GSSAPI | ✅ | Unix via `libgssapi` |
+| Windows SSPI | ✅ | Via `sspi-auth` feature |
+| Table-Valued Parameters | ✅ | Via `Tvp` type |
+| OpenTelemetry Metrics | ✅ | Via `otel` feature |
+| Always Encrypted | ⏳ | Cryptography implemented, key providers planned |
 
 ## Installation
 
@@ -189,18 +191,28 @@ for result in rows {
 
 | Feature | Default | Description |
 |---------|---------|-------------|
-| `otel` | No | OpenTelemetry instrumentation |
+| `otel` | No | OpenTelemetry tracing and metrics |
 | `zeroize` | No | Secure credential wiping |
 | `chrono` | Yes | Date/time type support via chrono |
 | `uuid` | Yes | UUID type support |
 | `decimal` | Yes | Decimal type support via rust_decimal |
 | `json` | Yes | JSON type support via serde_json |
 
+### Authentication Features (mssql-auth crate)
+
+| Feature | Description |
+|---------|-------------|
+| `azure-identity` | Azure Managed Identity and Service Principal |
+| `integrated-auth` | Kerberos/GSSAPI (Linux/macOS) |
+| `sspi-auth` | Windows SSPI (cross-platform via sspi-rs) |
+| `cert-auth` | Client certificate authentication |
+
 Enable optional features:
 
 ```toml
 [dependencies]
 mssql-client = { version = "0.1", features = ["otel"] }
+mssql-auth = { version = "0.1", features = ["sspi-auth"] }
 ```
 
 ## SQL Server Compatibility
@@ -227,7 +239,7 @@ See [STABILITY.md](STABILITY.md) for details on what's considered stable.
 
 | Feature | rust-mssql-driver | tiberius |
 |---------|-------------------|----------|
-| TDS 8.0 (strict mode) | First-class | Supported |
+| TDS 8.0 (strict mode) | First-class | Not supported |
 | Connection pooling | Built-in | External (bb8/deadpool) |
 | Runtime | Tokio-native | Runtime agnostic |
 | Prepared statement cache | Automatic LRU | Per-execution |

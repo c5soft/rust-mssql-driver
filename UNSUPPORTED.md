@@ -2,6 +2,32 @@
 
 This document lists features that are explicitly **not supported** by rust-mssql-driver, along with the rationale and recommended alternatives.
 
+## Quick Reference: Feature Status
+
+For clarity, here's what **IS** implemented in v0.1.x:
+
+### Authentication (Tier 1-4) ✅
+- SQL Server authentication (username/password)
+- Azure AD with pre-acquired token
+- Azure Managed Identity (`azure-identity` feature)
+- Azure Service Principal (`azure-identity` feature)
+- Kerberos/GSSAPI (`integrated-auth` feature)
+- Client Certificate (`cert-auth` feature)
+
+### Connection Features ✅
+- Per-query timeouts (`query_with_timeout()`, `execute_with_timeout()`)
+- Query cancellation with ATTENTION packets (`cancel_handle()`)
+- Connection pooling with metrics
+- Statement caching with LRU eviction
+
+### Observability ✅
+- OpenTelemetry tracing spans (`otel` feature)
+- OpenTelemetry metrics (`otel` feature, `DatabaseMetrics`)
+- SQL statement sanitization for safe logging
+- Pool metrics (via `pool.status()` and `pool.metrics()`)
+
+---
+
 ## Explicit Non-Goals
 
 The following features are intentionally not planned for implementation:
@@ -39,15 +65,30 @@ The following features are intentionally not planned for implementation:
 
 **Alternative:** Upgrade to SQL Server 2014+ (TDS 7.4) or SQL Server 2022 (TDS 8.0).
 
-### 4. Windows SSPI Authentication (Native)
+### 4. Windows SSPI Authentication
 
-**Status:** Not Planned for Cross-Platform
+**Status:** ✅ Implemented (Cross-Platform)
 
-**Rationale:** Native SSPI is Windows-only. On Windows, consider:
-- Using SQL Server authentication with secure credential storage
-- Using Azure AD authentication for cloud deployments
+The `sspi-auth` feature provides SSPI authentication via the sspi-rs crate, which works on:
+- Windows (native SSPI)
+- Linux/macOS (NTLM emulation via sspi-rs)
 
-**What IS Supported:** Kerberos/GSSAPI authentication on Linux/macOS via the `integrated-auth` feature, which is wire-compatible with SSPI.
+```rust
+use mssql_auth::SspiAuth;
+
+// Integrated auth (current user)
+let auth = SspiAuth::new("sqlserver.example.com", 1433)?;
+
+// Explicit credentials
+let auth = SspiAuth::with_credentials(
+    "sqlserver.example.com",
+    1433,
+    "DOMAIN\\user",
+    "password",
+)?;
+```
+
+**Also Supported:** Kerberos/GSSAPI authentication on Linux/macOS via the `integrated-auth` feature.
 
 ### 5. Named Pipes Transport
 
@@ -171,19 +212,26 @@ The driver is only tested on 64-bit platforms (x86_64, aarch64). 32-bit builds m
 
 ### Pool Metrics/Instrumentation
 
-**Status:** Basic Only
+**Status:** Basic Metrics Available
 
-The pool exposes basic metrics (size, available connections) but not detailed instrumentation.
+The pool exposes metrics via `pool.status()` and `pool.metrics()`:
 
 | Metric | Status |
 |--------|--------|
-| Pool size | Available |
-| Available connections | Available |
+| Pool size (total connections) | ✅ Available via `status().total` |
+| Available connections | ✅ Available via `status().available` |
+| In-use connections | ✅ Available via `status().in_use` |
+| Connections created | ✅ Available via `metrics().connections_created` |
+| Connections closed | ✅ Available via `metrics().connections_closed` |
+| Checkout success/failure | ✅ Available via `metrics().checkouts_*` |
+| Health check stats | ✅ Available via `metrics().health_checks_*` |
+| Reset stats | ✅ Available via `metrics().resets_*` |
+| Uptime | ✅ Available via `metrics().uptime` |
 | Wait queue depth | Not Exposed |
 | Connection acquisition time histogram | Not Exposed |
 | Connection lifetime histogram | Not Exposed |
 
-**Planned:** OpenTelemetry metrics integration is planned for v0.2.0.
+**Planned:** OpenTelemetry metrics (counters/histograms) integration is planned for v0.2.0.
 
 ### TTL-Based Connection Expiration
 
@@ -287,37 +335,27 @@ The following features are planned but not yet implemented:
 
 | Feature | Description | Status |
 |---------|-------------|--------|
-| Table-Valued Parameters (TVP) | Pass structured data as parameters | API defined, encoding pending |
-| Always Encrypted | Client-side encryption for sensitive columns | Planned |
+| Table-Valued Parameters (TVP) | Pass structured data as parameters | ✅ Implemented via `Tvp` type |
+| Always Encrypted (Cryptography) | AEAD encryption, RSA-OAEP key unwrap | ✅ Implemented via `always-encrypted` feature |
+| Always Encrypted (Key Providers) | Azure KeyVault, Windows CertStore | Planned (InMemoryKeyStore available) |
+| OpenTelemetry Metrics | Counter/histogram metrics | ✅ Implemented via `DatabaseMetrics` |
+| Windows SSPI Authentication | Cross-platform SSPI support | ✅ Implemented via `sspi-auth` feature |
 | Change Tracking Integration | Built-in change tracking query support | Planned |
-| OpenTelemetry Metrics | Counter/histogram metrics (tracing already works) | Planned |
+| TTL-Based Pool Expiration | Time-based connection cleanup | Config defined, reaper pending |
 
 ### Workarounds
 
-#### Table-Valued Parameters
-
-Until TVP is fully implemented:
-
-```sql
--- Option 1: Temporary table
-CREATE TABLE #UserIds (UserId INT);
-INSERT INTO #UserIds VALUES (1), (2), (3);
-SELECT * FROM Users WHERE UserId IN (SELECT UserId FROM #UserIds);
-
--- Option 2: JSON (SQL Server 2016+)
-SELECT * FROM Users WHERE UserId IN (SELECT value FROM OPENJSON(@json));
-
--- Option 3: XML
-SELECT * FROM Users WHERE UserId IN (
-  SELECT x.value('.', 'INT') FROM @xml.nodes('/ids/id') AS T(x)
-);
-```
-
 #### Always Encrypted
 
-Until Always Encrypted is implemented:
-- Use application-layer encryption before sending data to SQL Server
-- Use Transparent Data Encryption (TDE) for data-at-rest protection
+The cryptographic infrastructure is implemented (`always-encrypted` feature):
+- AEAD_AES_256_CBC_HMAC_SHA256 encryption/decryption
+- RSA-OAEP key unwrapping for CEK decryption
+- CEK caching with TTL expiration
+- InMemoryKeyStore for testing/development
+
+For production key stores (Azure KeyVault, Windows CertStore):
+- Implement the `KeyStoreProvider` trait for your key store
+- Use application-layer encryption before sending data to SQL Server as a fallback
 - **Do NOT use `ENCRYPTBYKEY`** as a workaround - it does not provide the same security guarantees (keys are accessible to DBAs)
 
 ---
@@ -365,3 +403,108 @@ If you need a feature not listed here:
 3. Consider whether a workaround exists
 
 We prioritize features based on community need and alignment with the driver's goals.
+
+---
+
+## Appendix: Comprehensive Feature Matrix
+
+### Authentication Matrix
+
+| Method | Feature Flag | v0.1.x Status | Notes |
+|--------|--------------|---------------|-------|
+| SQL Server (username/password) | default | ✅ Implemented | Login7 with password obfuscation |
+| Azure AD Token | default | ✅ Implemented | Pre-acquired JWT token |
+| Azure Managed Identity | `azure-identity` | ✅ Implemented | System/User-assigned identity |
+| Azure Service Principal | `azure-identity` | ✅ Implemented | Client ID + Secret |
+| Kerberos/GSSAPI | `integrated-auth` | ✅ Implemented | Linux/macOS via libgssapi |
+| Client Certificate (mTLS) | `cert-auth` | ✅ Implemented | X.509 via Azure AD |
+| Windows SSPI | `sspi-auth` | ✅ Implemented | Cross-platform via sspi-rs |
+| Azure CLI Credentials | - | ⏳ Planned v0.2.0 | Via `azure-identity` |
+
+### Protocol Features Matrix
+
+| Feature | v0.1.x Status | Notes |
+|---------|---------------|-------|
+| TDS 7.4 (SQL Server 2016+) | ✅ Implemented | Default protocol |
+| TDS 8.0 (SQL Server 2022+) | ✅ Implemented | Strict encryption mode |
+| Query Cancellation (ATTENTION) | ✅ Implemented | Mid-query cancel via `cancel_handle()` |
+| Per-Query Timeouts | ✅ Implemented | `query_with_timeout()`, `execute_with_timeout()` |
+| Prepared Statements | ✅ Implemented | Auto-cached with LRU eviction |
+| Connection Pooling | ✅ Implemented | Built-in with metrics |
+| Transaction Savepoints | ✅ Implemented | Validated identifiers |
+| Azure SQL Redirect | ✅ Implemented | Automatic gateway redirect handling |
+| MARS | ❌ Not Planned | Use pooling instead |
+| Named Pipes | ❌ Not Planned | Windows-only |
+| Shared Memory | ❌ Not Planned | Undocumented protocol |
+
+### Data Types Matrix
+
+| Type | v0.1.x Status | Notes |
+|------|---------------|-------|
+| INT, BIGINT, SMALLINT, TINYINT | ✅ Implemented | Full range support |
+| FLOAT, REAL | ✅ Implemented | IEEE 754 |
+| DECIMAL, NUMERIC | ✅ Implemented | Via rust_decimal |
+| VARCHAR, NVARCHAR | ✅ Implemented | Including MAX variants |
+| VARBINARY | ✅ Implemented | Including MAX variants |
+| DATE, TIME, DATETIME2 | ✅ Implemented | Via time crate |
+| DATETIMEOFFSET | ✅ Implemented | Timezone-aware |
+| UNIQUEIDENTIFIER (GUID) | ✅ Implemented | Via uuid crate |
+| BIT | ✅ Implemented | Boolean mapping |
+| XML | ✅ Implemented | As String |
+| JSON (NVARCHAR) | ✅ Implemented | As String, parse in app |
+| Table-Valued Parameters | ✅ Implemented | Via `Tvp` type |
+| Geometry/Geography | ❌ Not Planned | Spatial types |
+| HierarchyID | ❌ Not Planned | Specialized type |
+| User-Defined Types | ❌ Not Planned | Only built-in types |
+
+### Connection Pool Matrix
+
+| Feature | v0.1.x Status | Notes |
+|---------|---------------|-------|
+| Min/Max Connections | ✅ Implemented | Configurable |
+| Connection Timeout | ✅ Implemented | Configurable |
+| Idle Timeout | ✅ Config defined | Reaper task pending |
+| Max Lifetime | ✅ Config defined | Reaper task pending |
+| `sp_reset_connection` | ✅ Implemented | On connection return |
+| Health Checks | ✅ Implemented | Via `SELECT 1` |
+| Pool Metrics | ✅ Implemented | Via `pool.status()` and `pool.metrics()` |
+| TTL-Based Eviction | ⏳ Planned v0.2.0 | LRU currently |
+
+### Observability Matrix
+
+| Feature | v0.1.x Status | Notes |
+|---------|---------------|-------|
+| Tracing Spans | ✅ Implemented | `otel` feature, OpenTelemetry 0.31+ |
+| SQL Sanitization | ✅ Implemented | Configurable for safe logging |
+| Error Recording | ✅ Implemented | Via span events |
+| Semantic Conventions | ✅ Implemented | Following OTel DB conventions |
+| Metrics (Counters) | ✅ Implemented | `otel` feature, `DatabaseMetrics` |
+| Metrics (Histograms) | ✅ Implemented | `otel` feature, `OperationTimer` |
+
+### Security Matrix
+
+| Feature | v0.1.x Status | Notes |
+|---------|---------------|-------|
+| TLS Encryption | ✅ Implemented | Via rustls |
+| TLS 1.2/1.3 | ✅ Implemented | Configurable |
+| Certificate Validation | ✅ Implemented | Configurable |
+| Credential Zeroization | ✅ Implemented | `zeroize` feature |
+| SQL Injection Prevention | ✅ Implemented | Parameterized queries |
+| Always Encrypted (Cryptography) | ✅ Implemented | AEAD, RSA-OAEP, CEK caching |
+| Always Encrypted (Key Providers) | ⏳ Planned v0.3.0 | Azure KeyVault, Windows CertStore |
+
+### SQL Server Version Support
+
+| Version | v0.1.x Status | Notes |
+|---------|---------------|-------|
+| SQL Server 2022 | ✅ Supported | TDS 8.0 |
+| SQL Server 2019 | ✅ Supported | TDS 7.4 |
+| SQL Server 2017 | ✅ Supported | TDS 7.4 |
+| SQL Server 2016 | ✅ Supported | TDS 7.4 (minimum) |
+| SQL Server 2014 and earlier | ❌ Not Supported | Past EOL |
+| Azure SQL Database | ✅ Supported | With all auth methods |
+| Azure SQL Managed Instance | ✅ Supported | With redirect handling |
+
+---
+
+*Last updated: December 2024*
