@@ -70,4 +70,13 @@ pub enum ProtocolError {
     /// Protocol version mismatch.
     #[error("unsupported protocol version: {0}")]
     UnsupportedVersion(u32),
+
+    /// Invalid field value in a protocol structure.
+    #[error("invalid {field} value: {value}")]
+    InvalidField {
+        /// Field name.
+        field: &'static str,
+        /// Invalid value.
+        value: u32,
+    },
 }
