@@ -11,10 +11,10 @@
 //! |--------|--------------|--------|-------------|
 //! | SQL Authentication | default | ✅ Implemented | Username/password |
 //! | Azure AD Token | default | ✅ Implemented | Pre-obtained access token |
-//! | Azure Managed Identity | `azure-identity` | ⏳ Planned v0.2 | VM/container identity |
-//! | Service Principal | `azure-identity` | ⏳ Planned v0.2 | App credentials |
-//! | Integrated (Kerberos) | `integrated-auth` | ⏳ Planned v0.2 | GSSAPI/Kerberos |
-//! | Certificate | `cert-auth` | ⏳ Planned | Client certificate |
+//! | Azure Managed Identity | `azure-identity` | ✅ Implemented | VM/container identity |
+//! | Service Principal | `azure-identity` | ✅ Implemented | App credentials |
+//! | Integrated (Kerberos) | `integrated-auth` | ✅ Implemented | GSSAPI/Kerberos (Linux/macOS) |
+//! | Certificate | `cert-auth` | ✅ Implemented | Client certificate (mTLS) |
 //!
 //! ## Authentication Tiers
 //!
@@ -25,15 +25,19 @@
 //! - [`SqlServerAuth`] - Username/password via Login7
 //! - [`AzureAdAuth`] - Pre-acquired access token
 //!
-//! ### Tier 2 (Azure Native - `azure-identity` feature) ⏳ Planned for v0.2.0
+//! ### Tier 2 (Azure Native - `azure-identity` feature) ✅ Implemented
 //!
-//! - Managed Identity (Azure VM/Container)
-//! - Service Principal (Client ID + Secret)
+//! - [`ManagedIdentityAuth`] - Azure VM/Container identity
+//! - [`ServicePrincipalAuth`] - Client ID + Secret
 //!
-//! ### Tier 3 (Enterprise/Legacy - `integrated-auth` feature) ⏳ Planned for v0.2.0
+//! ### Tier 3 (Enterprise - `integrated-auth` feature) ✅ Implemented
 //!
-//! - Kerberos (Linux/macOS via GSSAPI)
-//! - NTLM/Kerberos (Windows via SSPI)
+//! - [`IntegratedAuth`] - Kerberos (Linux/macOS via GSSAPI)
+//! - Windows SSPI is NOT supported (see UNSUPPORTED.md)
+//!
+//! ### Tier 4 (Certificate - `cert-auth` feature) ✅ Implemented
+//!
+//! - [`CertificateAuth`] - Client certificate authentication (mTLS)
 //!
 //! ## Secure Credential Handling
 //!
@@ -65,6 +69,8 @@
 pub mod azure_ad;
 #[cfg(feature = "azure-identity")]
 pub mod azure_identity_auth;
+#[cfg(feature = "cert-auth")]
+pub mod cert_auth;
 pub mod credentials;
 pub mod error;
 #[cfg(feature = "integrated-auth")]
@@ -96,3 +102,7 @@ pub use azure_identity_auth::{ManagedIdentityAuth, ServicePrincipalAuth};
 // Integrated authentication (Kerberos/GSSAPI - with integrated-auth feature)
 #[cfg(feature = "integrated-auth")]
 pub use integrated_auth::IntegratedAuth;
+
+// Certificate authentication (Azure AD with X.509 certificate - with cert-auth feature)
+#[cfg(feature = "cert-auth")]
+pub use cert_auth::CertificateAuth;
