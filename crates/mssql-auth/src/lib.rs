@@ -14,6 +14,7 @@
 //! | Azure Managed Identity | `azure-identity` | ✅ Implemented | VM/container identity |
 //! | Service Principal | `azure-identity` | ✅ Implemented | App credentials |
 //! | Integrated (Kerberos) | `integrated-auth` | ✅ Implemented | GSSAPI/Kerberos (Linux/macOS) |
+//! | Windows SSPI | `sspi-auth` | ✅ Implemented | Native Windows SSPI |
 //! | Certificate | `cert-auth` | ✅ Implemented | Client certificate (mTLS) |
 //!
 //! ## Authentication Tiers
@@ -30,10 +31,10 @@
 //! - [`ManagedIdentityAuth`] - Azure VM/Container identity
 //! - [`ServicePrincipalAuth`] - Client ID + Secret
 //!
-//! ### Tier 3 (Enterprise - `integrated-auth` feature) ✅ Implemented
+//! ### Tier 3 (Enterprise - `integrated-auth` or `sspi-auth` feature) ✅ Implemented
 //!
 //! - [`IntegratedAuth`] - Kerberos (Linux/macOS via GSSAPI)
-//! - Windows SSPI is NOT supported (see UNSUPPORTED.md)
+//! - [`SspiAuth`] - Windows SSPI (native Windows, cross-platform via sspi-rs)
 //!
 //! ### Tier 4 (Certificate - `cert-auth` feature) ✅ Implemented
 //!
@@ -72,11 +73,22 @@ pub mod azure_identity_auth;
 #[cfg(feature = "cert-auth")]
 pub mod cert_auth;
 pub mod credentials;
+pub mod encryption;
 pub mod error;
 #[cfg(feature = "integrated-auth")]
 pub mod integrated_auth;
 pub mod provider;
 pub mod sql_auth;
+#[cfg(feature = "sspi-auth")]
+pub mod sspi_auth;
+
+// Always Encrypted cryptography
+#[cfg(feature = "always-encrypted")]
+pub mod aead;
+#[cfg(feature = "always-encrypted")]
+pub mod key_store;
+#[cfg(feature = "always-encrypted")]
+pub mod key_unwrap;
 
 // Core types
 pub use credentials::Credentials;
@@ -106,3 +118,21 @@ pub use integrated_auth::IntegratedAuth;
 // Certificate authentication (Azure AD with X.509 certificate - with cert-auth feature)
 #[cfg(feature = "cert-auth")]
 pub use cert_auth::CertificateAuth;
+
+// Windows SSPI authentication (with sspi-auth feature)
+#[cfg(feature = "sspi-auth")]
+pub use sspi_auth::SspiAuth;
+
+// Always Encrypted infrastructure
+pub use encryption::{
+    CekMetadata, ColumnEncryptionConfig, ColumnEncryptionInfo, EncryptedValue, EncryptionError,
+    EncryptionType, KeyStoreProvider,
+};
+
+// Always Encrypted cryptography (with always-encrypted feature)
+#[cfg(feature = "always-encrypted")]
+pub use aead::AeadEncryptor;
+#[cfg(feature = "always-encrypted")]
+pub use key_store::{CekCache, CekCacheKey, InMemoryKeyStore};
+#[cfg(feature = "always-encrypted")]
+pub use key_unwrap::RsaKeyUnwrapper;
