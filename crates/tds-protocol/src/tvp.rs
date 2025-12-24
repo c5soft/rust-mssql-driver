@@ -511,6 +511,46 @@ pub fn encode_tvp_datetime2(time_intervals: u64, days: u32, scale: u8, buf: &mut
     buf.put_u8(((days >> 16) & 0xFF) as u8);
 }
 
+/// Encode a DATETIMEOFFSET value for TVP.
+///
+/// DATETIMEOFFSET is TIME followed by DATE followed by timezone offset.
+///
+/// # Arguments
+///
+/// * `time_intervals` - Time in 100-nanosecond intervals since midnight
+/// * `days` - Days since year 1 (0001-01-01)
+/// * `offset_minutes` - Timezone offset in minutes (e.g., -480 for UTC-8, 330 for UTC+5:30)
+/// * `scale` - Fractional seconds precision (0-7)
+pub fn encode_tvp_datetimeoffset(
+    time_intervals: u64,
+    days: u32,
+    offset_minutes: i16,
+    scale: u8,
+    buf: &mut BytesMut,
+) {
+    // Length depends on scale (time bytes + 3 date bytes + 2 offset bytes)
+    let time_len = match scale {
+        0..=2 => 3,
+        3..=4 => 4,
+        5..=7 => 5,
+        _ => 5,
+    };
+    buf.put_u8(time_len + 3 + 2); // time + date + offset
+
+    // Time component
+    for i in 0..time_len {
+        buf.put_u8((time_intervals >> (8 * i)) as u8);
+    }
+
+    // Date component
+    buf.put_u8((days & 0xFF) as u8);
+    buf.put_u8(((days >> 8) & 0xFF) as u8);
+    buf.put_u8(((days >> 16) & 0xFF) as u8);
+
+    // Timezone offset in minutes (signed 16-bit little-endian)
+    buf.put_i16_le(offset_minutes);
+}
+
 /// Encode a DECIMAL value for TVP.
 ///
 /// # Arguments

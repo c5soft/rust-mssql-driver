@@ -1148,10 +1148,28 @@ impl<S: ConnectionState> Client<S> {
                 tds_protocol::tvp::encode_tvp_datetime2(intervals, days, scale, buf);
             }
             #[cfg(feature = "chrono")]
-            SqlValue::DateTimeOffset(_dto) => {
-                // DateTimeOffset encoding is complex; encode as string for now
-                // TODO: Implement proper DateTimeOffset encoding
-                encode_tvp_null(wire_type, buf);
+            SqlValue::DateTimeOffset(dto) => {
+                use chrono::{Offset, Timelike};
+                // Time component (in 100-nanosecond intervals)
+                let nanos = dto.time().num_seconds_from_midnight() as u64 * 1_000_000_000
+                    + dto.time().nanosecond() as u64;
+                let intervals = nanos / 100;
+                // Date component (days since 0001-01-01)
+                let base = chrono::NaiveDate::from_ymd_opt(1, 1, 1).unwrap();
+                let days = dto.date_naive().signed_duration_since(base).num_days() as u32;
+                // Timezone offset in minutes
+                let offset_minutes = (dto.offset().fix().local_minus_utc() / 60) as i16;
+                let scale = match wire_type {
+                    TvpWireType::DateTimeOffset { scale } => *scale,
+                    _ => 7,
+                };
+                tds_protocol::tvp::encode_tvp_datetimeoffset(
+                    intervals,
+                    days,
+                    offset_minutes,
+                    scale,
+                    buf,
+                );
             }
             #[cfg(feature = "json")]
             SqlValue::Json(j) => {
