@@ -788,6 +788,13 @@ impl BulkInsert {
                     to: "bulk copy value",
                 });
             }
+            // Handle future SqlValue variants
+            _ => {
+                return Err(TypeError::UnsupportedConversion {
+                    from: value.type_name().to_string(),
+                    to: "bulk copy value",
+                });
+            }
         }
 
         Ok(())

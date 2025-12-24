@@ -9,6 +9,7 @@ use crate::tvp::TvpData;
 /// This enum provides a type-safe way to handle SQL values that may be
 /// of various types, including NULL.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum SqlValue {
     /// NULL value.
     Null,

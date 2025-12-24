@@ -945,6 +945,13 @@ impl<S: ConnectionState> Client<S> {
                         // Encode TVP using the wire format
                         Self::encode_tvp_param(&name, tvp_data)?
                     }
+                    // Handle future SqlValue variants
+                    _ => {
+                        return Err(Error::Type(mssql_types::TypeError::UnsupportedConversion {
+                            from: sql_value.type_name().to_string(),
+                            to: "RPC parameter",
+                        }));
+                    }
                 })
             })
             .collect()
@@ -1157,6 +1164,10 @@ impl<S: ConnectionState> Client<S> {
             }
             SqlValue::Tvp(_) => {
                 // Nested TVPs are not supported
+                encode_tvp_null(wire_type, buf);
+            }
+            // Handle future SqlValue variants as NULL
+            _ => {
                 encode_tvp_null(wire_type, buf);
             }
         }

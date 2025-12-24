@@ -4,6 +4,7 @@ use thiserror::Error;
 
 /// Errors that can occur during TDS protocol parsing or encoding.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ProtocolError {
     /// Packet data is truncated or incomplete.
     #[error("incomplete packet: expected {expected} bytes, got {actual}")]
