@@ -46,6 +46,9 @@ impl AuthMethod {
 ///
 /// This contains the data needed to authenticate with SQL Server,
 /// depending on the authentication method being used.
+///
+/// Sensitive fields (password bytes, tokens, SSPI blobs) are securely zeroized
+/// on drop when the `zeroize` feature is enabled.
 #[derive(Debug, Clone)]
 pub enum AuthData {
     /// SQL Server credentials for Login7 packet.
@@ -156,6 +159,27 @@ impl<T: AsyncAuthProvider> AuthProvider for T {
 
     fn needs_refresh(&self) -> bool {
         <T as AsyncAuthProvider>::needs_refresh(self)
+    }
+}
+
+// Secure zeroization of sensitive authentication data when `zeroize` feature is enabled.
+#[cfg(feature = "zeroize")]
+impl Drop for AuthData {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+
+        match self {
+            AuthData::SqlServer { password_bytes, .. } => {
+                password_bytes.zeroize();
+            }
+            AuthData::FedAuth { token, .. } => {
+                token.zeroize();
+            }
+            AuthData::Sspi { blob } => {
+                blob.zeroize();
+            }
+            AuthData::None => {}
+        }
     }
 }
 
