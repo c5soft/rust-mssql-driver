@@ -90,3 +90,10 @@ expect_used = "warn"
 panic = "warn"
 todo = "warn"
 dbg_macro = "warn"
+
+# cargo-semver-checks configuration
+# Allow adding #[non_exhaustive] to enums during 0.x development
+# This is a one-time breaking change that prevents future breaking changes
+# from adding new enum variants. Acceptable in pre-1.0 per semver spec.
+[workspace.metadata.cargo-semver-checks.lints]
+enum_marked_non_exhaustive = "allow"
