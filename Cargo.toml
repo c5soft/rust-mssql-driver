@@ -97,3 +97,6 @@ dbg_macro = "warn"
 # from adding new enum variants. Acceptable in pre-1.0 per semver spec.
 [workspace.metadata.cargo-semver-checks.lints]
 enum_marked_non_exhaustive = "allow"
+# Allow new enum variants added alongside the #[non_exhaustive] migration
+# These variants were added before non_exhaustive was applied
+enum_variant_added = "allow"

@@ -6,6 +6,7 @@ use thiserror::Error;
 
 /// Errors that can occur during client operations.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum Error {
     /// Connection failed.
     #[error("connection failed: {0}")]
