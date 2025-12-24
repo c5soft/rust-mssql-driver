@@ -4,7 +4,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+| 0.2.x   | :white_check_mark: |
+| 0.1.x   | :x: (end of life)  |
 
 ## Reporting a Vulnerability
 
@@ -184,7 +185,20 @@ Encrypt=true;TrustServerCertificate=false
 
 ### Always Encrypted Considerations
 
-**Important:** This driver does NOT yet support Always Encrypted (planned for v2.0).
+**Status:** Partial support in v0.2.0 (cryptography ✅, key providers ⏳)
+
+The driver supports Always Encrypted client-side encryption via the `always-encrypted` feature:
+
+**Implemented (v0.2.0):**
+- AEAD_AES_256_CBC_HMAC_SHA256 encryption/decryption
+- RSA-OAEP key unwrapping for CEK decryption
+- CEK caching with TTL expiration
+- `InMemoryKeyStore` for development/testing
+- `KeyStoreProvider` trait for custom implementations
+
+**Pending (v0.3.0):**
+- Azure Key Vault key provider
+- Windows Certificate Store key provider
 
 Always Encrypted provides **client-side encryption** for data that remains encrypted even on the SQL Server. This protects against threats from the server side:
 
@@ -196,11 +210,13 @@ Always Encrypted provides **client-side encryption** for data that remains encry
 | Backup theft | ❌ Exposed | ✅ Protected |
 
 **If your threat model includes malicious DBAs or server compromise:**
-1. Use Microsoft's ODBC/OLE DB driver with Always Encrypted until v2.0
-2. Implement application-layer encryption before sending to SQL
-3. Do NOT use T-SQL `ENCRYPTBYKEY` - keys exist on the server
+1. Use the `always-encrypted` feature with `InMemoryKeyStore` for dev/test
+2. Implement the `KeyStoreProvider` trait for your production key store
+3. Wait for v0.3.0 for Azure Key Vault / Windows CertStore providers
+4. As a fallback, implement application-layer encryption before sending to SQL
+5. Do NOT use T-SQL `ENCRYPTBYKEY` - keys exist on the server
 
-See [docs/ARCHITECTURE.md § ADR-013](docs/ARCHITECTURE.md) for details.
+See [ARCHITECTURE.md § ADR-013](ARCHITECTURE.md) for details.
 
 ### Secure Defaults
 
@@ -334,7 +350,7 @@ let config = TlsConfig::new()
 - Weak passwords
 - Misconfigured SQL Server instances
 - Network attacks (use TLS)
-- Compromised SQL Server (use Always Encrypted when available)
+- Compromised SQL Server (use Always Encrypted `always-encrypted` feature)
 
 ## Security Best Practices
 
@@ -388,6 +404,7 @@ client.query(sql, &[]).await.map_err(|e| format!("{:?}", e))?;
 ### Optional (Feature Flags)
 
 - `zeroize` - Secure credential wiping
+- `always-encrypted` - Client-side encryption (cryptography implemented, production key providers in v0.3.0)
 - `otel` - Security event tracing (with care around sensitive data)
 
 ## Dependency Security

@@ -1,5 +1,7 @@
 # mssql-driver-pool
 
+> Part of the [rust-mssql-driver](../../README.md) project.
+
 Purpose-built connection pool for SQL Server with lifecycle management.
 
 ## Overview

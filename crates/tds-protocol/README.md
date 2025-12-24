@@ -1,5 +1,7 @@
 # tds-protocol
 
+> Part of the [rust-mssql-driver](../../README.md) project.
+
 Pure Rust implementation of the MS-TDS (Tabular Data Stream) protocol used by Microsoft SQL Server.
 
 ## Overview

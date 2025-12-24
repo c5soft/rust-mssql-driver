@@ -206,6 +206,8 @@ for result in rows {
 | `integrated-auth` | Kerberos/GSSAPI (Linux/macOS) |
 | `sspi-auth` | Windows SSPI (cross-platform via sspi-rs) |
 | `cert-auth` | Client certificate authentication |
+| `zeroize` | Secure credential wiping from memory |
+| `always-encrypted` | Client-side encryption (cryptography implemented) |
 
 Enable optional features:
 
@@ -258,9 +260,35 @@ See the [`examples/`](crates/mssql-client/examples/) directory:
 
 ## Documentation
 
-- [API Documentation](https://docs.rs/mssql-client) - Full API reference
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Design decisions and internals
-- [CHANGELOG.md](CHANGELOG.md) - Version history
+### API & Reference
+
+- [API Documentation](https://docs.rs/mssql-client) - Full API reference on docs.rs
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Design decisions, ADRs, and internals
+- [CHANGELOG.md](CHANGELOG.md) - Version history and release notes
+
+### Guides & Policies
+
+- [STABILITY.md](STABILITY.md) - API stability guarantees and versioning policy
+- [SECURITY.md](SECURITY.md) - Security policy, threat model, and best practices
+- [LIMITATIONS.md](LIMITATIONS.md) - Known limitations and workarounds
+- [UNSUPPORTED.md](UNSUPPORTED.md) - Explicitly unsupported features with rationale
+- [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) - Production readiness checklist
+
+### Crate-Specific Documentation
+
+Each crate has its own README with crate-specific documentation:
+
+| Crate | Description |
+|-------|-------------|
+| [`mssql-client`](crates/mssql-client/README.md) | Main client API |
+| [`mssql-driver-pool`](crates/mssql-pool/README.md) | Connection pooling |
+| [`mssql-derive`](crates/mssql-derive/README.md) | Derive macros |
+| [`mssql-types`](crates/mssql-types/README.md) | Type conversions |
+| [`mssql-auth`](crates/mssql-auth/README.md) | Authentication providers |
+| [`mssql-tls`](crates/mssql-tls/README.md) | TLS negotiation |
+| [`tds-protocol`](crates/tds-protocol/README.md) | TDS protocol layer |
+| [`mssql-codec`](crates/mssql-codec/README.md) | Async framing |
+| [`mssql-testing`](crates/mssql-testing/README.md) | Test infrastructure |
 
 ## Contributing
 

@@ -90,19 +90,19 @@ The following APIs are considered unstable and may change without a major versio
 - `mssql-codec` frame structures
 - `mssql-tls` negotiation details
 
-### Feature-Gated Experimental APIs
+### Feature-Gated APIs with Platform Dependencies
 
-APIs behind these feature flags are considered unstable:
+APIs behind these feature flags depend on platform-specific libraries and may have different behavior across platforms:
 
-- `azure-identity` - Azure authentication (not yet implemented)
-- `integrated-auth` - Windows/Kerberos auth (not yet implemented)
+- `azure-identity` - Azure authentication (requires Azure SDK)
+- `integrated-auth` - Kerberos/GSSAPI auth (requires libgssapi on Unix)
+- `sspi-auth` - Windows SSPI auth (requires sspi-rs)
 
 ### Unstable Functions
 
 | API | Reason |
 |-----|--------|
 | `BlobReader::*` | Streaming implementation incomplete |
-| `BulkCopy::*` | BCP protocol implementation in progress |
 | `Client::with_raw_connection()` | Low-level access, may change |
 
 ## Deprecation Policy
@@ -170,7 +170,7 @@ Stability is enforced through:
 1. **Comprehensive test suite** - Unit, integration, and property-based tests
 2. **CI on all Tier 1 platforms** - Every PR tested
 3. **cargo-deny** - Dependency auditing
-4. **cargo-semver-checks** - Automated semver verification (planned)
+4. **cargo-semver-checks** - Automated semver verification in CI
 
 ## Reporting Stability Issues
 
@@ -195,8 +195,11 @@ We take backwards compatibility seriously and will work to resolve issues prompt
 | `json` | Yes | Stable |
 | `otel` | No | Stable |
 | `zeroize` | No | Stable |
-| `azure-identity` | No | Unstable |
-| `integrated-auth` | No | Unstable |
+| `azure-identity` | No | Stable (platform-dependent) |
+| `integrated-auth` | No | Stable (platform-dependent) |
+| `sspi-auth` | No | Stable (platform-dependent) |
+| `cert-auth` | No | Stable |
+| `always-encrypted` | No | Stable (key providers pending) |
 
 ## SQL Server Compatibility
 

@@ -467,7 +467,7 @@ tiberius = { version = "0.12", features = ["chrono", "rust_decimal"] }
 
 ```toml
 [dependencies]
-mssql-client = { version = "0.1", features = ["chrono", "decimal", "uuid"] }
+mssql-client = { version = "0.2", features = ["chrono", "decimal", "uuid"] }
 ```
 
 Available features:

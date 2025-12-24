@@ -4,7 +4,7 @@ This document describes known limitations of the rust-mssql-driver and recommend
 
 ## Overview
 
-The driver is designed for production use with SQL Server 2016+ and Azure SQL. Some advanced features are not yet implemented or have limitations.
+The driver is designed for production use with SQL Server 2016+ and Azure SQL. Most common features are fully implemented, but some advanced features have limitations.
 
 ---
 
@@ -12,7 +12,7 @@ The driver is designed for production use with SQL Server 2016+ and Azure SQL. S
 
 ### Multiple Active Result Sets (MARS)
 
-**Status:** Not supported in v0.x/v1.0
+**Status:** Not supported
 
 **Description:** MARS allows multiple queries to be active simultaneously on a single connection. This driver does not support MARS.
 
@@ -22,10 +22,10 @@ The driver is designed for production use with SQL Server 2016+ and Azure SQL. S
 use mssql_driver_pool::{Pool, PoolConfig};
 
 // Create a pool with multiple connections
-let pool = Pool::builder()
-    .max_size(10)  // 10 concurrent queries possible
-    .build(config)
-    .await?;
+let pool = Pool::new(
+    PoolConfig::new().max_connections(10),
+    config
+).await?;
 
 // Execute queries concurrently using different connections
 let (result1, result2) = tokio::join!(
@@ -40,7 +40,7 @@ let (result1, result2) = tokio::join!(
 );
 ```
 
-**Timeline:** MARS is planned for v2.0.
+**Timeline:** MARS support may be considered for a future major version.
 
 ---
 
@@ -61,52 +61,20 @@ let (result1, result2) = tokio::join!(
 
 3. **Memory Budget:** Ensure your application has sufficient memory headroom for the largest expected object.
 
-**Timeline:** True streaming LOB support is planned for v1.1.
+**Timeline:** True streaming LOB support may be considered for a future version.
 
 ---
 
-### Table-Valued Parameters (TVP)
+### Always Encrypted Key Providers
 
-**Status:** Not supported
+**Status:** Partial (cryptography implemented, key providers not yet available)
 
-**Description:** Table-Valued Parameters allow passing collections of structured data to stored procedures. The TVP encoding requires TDS-specific binary encoding (type_id 0xF3) that is not yet implemented.
+**Description:** SQL Server's Always Encrypted feature has client-side encryption infrastructure implemented (AEAD_AES_256_CBC_HMAC_SHA256, RSA-OAEP key unwrapping, CEK management), but key providers for retrieving Column Master Keys are not yet available.
 
-**Workaround:** Use one of these alternatives:
-
-1. **Temporary Tables:**
-   ```rust
-   client.execute("CREATE TABLE #UserIds (UserId INT)", &[]).await?;
-   client.execute("INSERT INTO #UserIds VALUES (1), (2), (3)", &[]).await?;
-   client.execute("EXEC ProcessUsers", &[]).await?;
-   ```
-
-2. **XML Parameters:**
-   ```rust
-   let xml = "<ids><id>1</id><id>2</id><id>3</id></ids>";
-   client.execute(
-       "SELECT * FROM Users WHERE UserId IN (SELECT x.value('.', 'INT') FROM @xml.nodes('/ids/id') AS T(x))",
-       &[&xml]
-   ).await?;
-   ```
-
-3. **JSON Parameters (SQL Server 2016+):**
-   ```rust
-   let json = "[1, 2, 3]";
-   client.execute(
-       "SELECT * FROM Users WHERE UserId IN (SELECT value FROM OPENJSON(@json))",
-       &[&json]
-   ).await?;
-   ```
-
-**Timeline:** TVP support is planned for v1.1.
-
----
-
-### Always Encrypted
-
-**Status:** Not supported
-
-**Description:** SQL Server's Always Encrypted feature (client-side encryption of sensitive columns) is not implemented.
+**Missing Key Providers:**
+- Azure Key Vault
+- Windows Certificate Store
+- Custom key providers
 
 **Workaround:** Use application-layer encryption:
 
@@ -126,61 +94,7 @@ let plaintext = cipher.decrypt(nonce, &ciphertext)?;
 
 **Important:** Do NOT use SQL Server's `ENCRYPTBYKEY` as a workaround. It provides different security guarantees (keys stored on server, DBAs can access plaintext).
 
-**Timeline:** Always Encrypted is planned for v2.0.
-
----
-
-### Kerberos/Windows Authentication
-
-**Status:** Not supported
-
-**Description:** Kerberos (GSSAPI) and NTLM authentication for Windows domain environments are not implemented.
-
-**Supported Authentication Methods:**
-- SQL Server authentication (username/password)
-- Azure Active Directory with access token
-
-**Workaround:**
-
-1. **SQL Authentication:** Create SQL logins for application access:
-   ```sql
-   CREATE LOGIN app_user WITH PASSWORD = 'StrongPassword!';
-   CREATE USER app_user FOR LOGIN app_user;
-   ```
-
-2. **Azure AD Token:** For Azure SQL, use Azure AD authentication with a pre-obtained token:
-   ```rust
-   let config = Config::builder()
-       .host("your-server.database.windows.net")
-       .authentication(Authentication::AadToken(token))
-       .build()?;
-   ```
-
-**Timeline:** Kerberos support is planned for v1.1.
-
----
-
-### Query Cancellation
-
-**Status:** Limited support
-
-**Description:** Active queries cannot be cancelled mid-execution. The TDS ATTENTION signal is not implemented.
-
-**Workaround:** Use query timeouts:
-
-```rust
-let config = Config::builder()
-    .host("localhost")
-    .query_timeout(Duration::from_secs(30))  // Query timeout
-    .build()?;
-```
-
-For long-running queries, consider:
-1. Breaking work into smaller batches
-2. Using SQL Server's query governor
-3. Implementing application-level polling patterns
-
-**Timeline:** Query cancellation is planned for v1.1.
+**Timeline:** Azure Key Vault key provider is planned for v0.3.0.
 
 ---
 
@@ -235,49 +149,23 @@ For long-running queries, consider:
 
 ---
 
-## Performance Limitations
+## Performance Considerations
 
-### Bulk Copy (BCP)
-
-**Status:** In development (partial implementation)
-
-**Description:** The bulk copy protocol for high-speed data loading is partially implemented.
-
-**Workaround:** Use parameterized INSERT statements with batching:
-
-```rust
-// Batch inserts for better performance
-for chunk in data.chunks(1000) {
-    let mut tx = client.begin_transaction().await?;
-    for record in chunk {
-        tx.execute(
-            "INSERT INTO table (col1, col2) VALUES (@p1, @p2)",
-            &[&record.col1, &record.col2]
-        ).await?;
-    }
-    tx.commit().await?;
-}
-```
-
-**Timeline:** Full BCP support is planned for v1.0.
-
----
-
-### Prepared Statement Memory
+### Prepared Statement Cache
 
 **Status:** LRU cache only
 
-**Description:** Prepared statements use an LRU cache. There is no TTL-based expiration.
+**Description:** Prepared statements use an LRU cache with configurable size. There is no TTL-based expiration.
 
 **Impact:** Long-running connections with varied query patterns may accumulate stale prepared statements.
 
 **Workaround:**
-- Configure appropriate cache size
-- Periodically recycle connections (pool handles this automatically)
+- Configure appropriate cache size via connection settings
+- Periodically recycle connections (the pool handles this automatically via `idle_timeout`)
 
 ---
 
-## Concurrency Limitations
+## Concurrency Considerations
 
 ### Connection Thread Safety
 
@@ -289,32 +177,13 @@ for chunk in data.chunks(1000) {
 
 ```rust
 // Pool provides safe concurrent access
-let pool = Pool::builder().max_size(10).build(config).await?;
+let pool = Pool::new(PoolConfig::new().max_connections(10), config).await?;
 
 // Each task gets its own connection
 tokio::spawn(async move {
-    let conn = pool.get().await?;
+    let mut conn = pool.get().await?;
     // Use connection
 });
-```
-
----
-
-## Timeout Limitations
-
-### No Per-Query Timeout Override
-
-**Status:** Global only
-
-**Description:** Query timeout is set at connection configuration time. Individual queries cannot override it.
-
-**Workaround:** Use different connections with different timeout configurations, or implement application-level timeout logic:
-
-```rust
-match tokio::time::timeout(Duration::from_secs(5), client.query(sql, &[])).await {
-    Ok(result) => result?,
-    Err(_) => return Err(Error::Timeout),
-}
 ```
 
 ---

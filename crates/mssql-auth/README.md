@@ -1,5 +1,7 @@
 # mssql-auth
 
+> Part of the [rust-mssql-driver](../../README.md) project.
+
 Authentication strategies for SQL Server connections.
 
 ## Overview
@@ -47,16 +49,18 @@ let azure_auth = AzureAdAuth::with_token("eyJ0eXAi...");
 | Flag | Default | Description |
 |------|---------|-------------|
 | `azure-identity` | No | Azure Managed Identity and Service Principal support |
-| `integrated-auth` | No | Kerberos/SPNEGO via libgssapi |
-| `cert-auth` | No | Client certificate authentication |
+| `integrated-auth` | No | Kerberos/SPNEGO via libgssapi (Linux/macOS) |
+| `sspi-auth` | No | Windows SSPI authentication (cross-platform via sspi-rs) |
+| `cert-auth` | No | Client certificate authentication (Azure AD with X.509) |
 | `zeroize` | No | Secure credential zeroization on drop |
+| `always-encrypted` | No | Always Encrypted client-side encryption support |
 
 ## Secure Credential Handling
 
 Enable the `zeroize` feature for secure credential handling:
 
 ```toml
-mssql-auth = { version = "0.1", features = ["zeroize"] }
+mssql-auth = { version = "0.2", features = ["zeroize"] }
 ```
 
 This automatically zeroes sensitive data from memory when credentials are dropped.

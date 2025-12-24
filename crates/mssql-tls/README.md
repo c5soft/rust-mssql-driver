@@ -1,5 +1,7 @@
 # mssql-tls
 
+> Part of the [rust-mssql-driver](../../README.md) project.
+
 TLS negotiation layer for SQL Server connections.
 
 ## Overview

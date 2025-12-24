@@ -1,5 +1,7 @@
 # mssql-derive
 
+> Part of the [rust-mssql-driver](../../README.md) project.
+
 Procedural macros for SQL Server row mapping and parameter handling.
 
 ## Overview

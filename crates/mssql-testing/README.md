@@ -1,5 +1,7 @@
 # mssql-testing
 
+> Part of the [rust-mssql-driver](../../README.md) project.
+
 Test infrastructure for SQL Server driver development.
 
 ## Overview

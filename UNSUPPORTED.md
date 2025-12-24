@@ -4,7 +4,7 @@ This document lists features that are explicitly **not supported** by rust-mssql
 
 ## Quick Reference: Feature Status
 
-For clarity, here's what **IS** implemented in v0.1.x:
+For clarity, here's what **IS** implemented in v0.2.x:
 
 ### Authentication (Tier 1-4) ✅
 - SQL Server authentication (username/password)
@@ -231,7 +231,7 @@ The pool exposes metrics via `pool.status()` and `pool.metrics()`:
 | Connection acquisition time histogram | Not Exposed |
 | Connection lifetime histogram | Not Exposed |
 
-**Planned:** OpenTelemetry metrics (counters/histograms) integration is planned for v0.2.0.
+**Note:** OpenTelemetry metrics integration is available via the `otel` feature (see `DatabaseMetrics`).
 
 ### TTL-Based Connection Expiration
 
@@ -331,17 +331,25 @@ There is no built-in circuit breaker for failing connections.
 
 The following features are planned but not yet implemented:
 
-### v0.2.0 Targets
+### v0.3.0 Targets
 
 | Feature | Description | Status |
 |---------|-------------|--------|
-| Table-Valued Parameters (TVP) | Pass structured data as parameters | ✅ Implemented via `Tvp` type |
-| Always Encrypted (Cryptography) | AEAD encryption, RSA-OAEP key unwrap | ✅ Implemented via `always-encrypted` feature |
 | Always Encrypted (Key Providers) | Azure KeyVault, Windows CertStore | Planned (InMemoryKeyStore available) |
-| OpenTelemetry Metrics | Counter/histogram metrics | ✅ Implemented via `DatabaseMetrics` |
-| Windows SSPI Authentication | Cross-platform SSPI support | ✅ Implemented via `sspi-auth` feature |
 | Change Tracking Integration | Built-in change tracking query support | Planned |
 | TTL-Based Pool Expiration | Time-based connection cleanup | Config defined, reaper pending |
+| Streaming LOB Support | True streaming for large objects | Planned |
+
+### Implemented in v0.2.0
+
+| Feature | Description |
+|---------|-------------|
+| Table-Valued Parameters (TVP) | Pass structured data as parameters via `Tvp` type |
+| Always Encrypted (Cryptography) | AEAD encryption, RSA-OAEP key unwrap via `always-encrypted` feature |
+| OpenTelemetry Metrics | Counter/histogram metrics via `DatabaseMetrics` |
+| Windows SSPI Authentication | Cross-platform SSPI support via `sspi-auth` feature |
+| Query Cancellation | Mid-query cancel via `cancel_handle()` with ATTENTION packets |
+| Per-Query Timeouts | `query_with_timeout()`, `execute_with_timeout()` methods |
 
 ### Workarounds
 
@@ -410,8 +418,8 @@ We prioritize features based on community need and alignment with the driver's g
 
 ### Authentication Matrix
 
-| Method | Feature Flag | v0.1.x Status | Notes |
-|--------|--------------|---------------|-------|
+| Method | Feature Flag | Status | Notes |
+|--------|--------------|--------|-------|
 | SQL Server (username/password) | default | ✅ Implemented | Login7 with password obfuscation |
 | Azure AD Token | default | ✅ Implemented | Pre-acquired JWT token |
 | Azure Managed Identity | `azure-identity` | ✅ Implemented | System/User-assigned identity |
@@ -419,12 +427,12 @@ We prioritize features based on community need and alignment with the driver's g
 | Kerberos/GSSAPI | `integrated-auth` | ✅ Implemented | Linux/macOS via libgssapi |
 | Client Certificate (mTLS) | `cert-auth` | ✅ Implemented | X.509 via Azure AD |
 | Windows SSPI | `sspi-auth` | ✅ Implemented | Cross-platform via sspi-rs |
-| Azure CLI Credentials | - | ⏳ Planned v0.2.0 | Via `azure-identity` |
+| Azure CLI Credentials | `azure-identity` | ✅ Implemented | Via azure_identity crate |
 
 ### Protocol Features Matrix
 
-| Feature | v0.1.x Status | Notes |
-|---------|---------------|-------|
+| Feature | Status | Notes |
+|---------|--------|-------|
 | TDS 7.4 (SQL Server 2016+) | ✅ Implemented | Default protocol |
 | TDS 8.0 (SQL Server 2022+) | ✅ Implemented | Strict encryption mode |
 | Query Cancellation (ATTENTION) | ✅ Implemented | Mid-query cancel via `cancel_handle()` |
@@ -439,14 +447,14 @@ We prioritize features based on community need and alignment with the driver's g
 
 ### Data Types Matrix
 
-| Type | v0.1.x Status | Notes |
-|------|---------------|-------|
+| Type | Status | Notes |
+|------|--------|-------|
 | INT, BIGINT, SMALLINT, TINYINT | ✅ Implemented | Full range support |
 | FLOAT, REAL | ✅ Implemented | IEEE 754 |
 | DECIMAL, NUMERIC | ✅ Implemented | Via rust_decimal |
 | VARCHAR, NVARCHAR | ✅ Implemented | Including MAX variants |
 | VARBINARY | ✅ Implemented | Including MAX variants |
-| DATE, TIME, DATETIME2 | ✅ Implemented | Via time crate |
+| DATE, TIME, DATETIME2 | ✅ Implemented | Via chrono crate |
 | DATETIMEOFFSET | ✅ Implemented | Timezone-aware |
 | UNIQUEIDENTIFIER (GUID) | ✅ Implemented | Via uuid crate |
 | BIT | ✅ Implemented | Boolean mapping |
@@ -459,8 +467,8 @@ We prioritize features based on community need and alignment with the driver's g
 
 ### Connection Pool Matrix
 
-| Feature | v0.1.x Status | Notes |
-|---------|---------------|-------|
+| Feature | Status | Notes |
+|---------|--------|-------|
 | Min/Max Connections | ✅ Implemented | Configurable |
 | Connection Timeout | ✅ Implemented | Configurable |
 | Idle Timeout | ✅ Config defined | Reaper task pending |
@@ -468,12 +476,12 @@ We prioritize features based on community need and alignment with the driver's g
 | `sp_reset_connection` | ✅ Implemented | On connection return |
 | Health Checks | ✅ Implemented | Via `SELECT 1` |
 | Pool Metrics | ✅ Implemented | Via `pool.status()` and `pool.metrics()` |
-| TTL-Based Eviction | ⏳ Planned v0.2.0 | LRU currently |
+| TTL-Based Eviction | ⏳ Planned v0.3.0 | LRU currently |
 
 ### Observability Matrix
 
-| Feature | v0.1.x Status | Notes |
-|---------|---------------|-------|
+| Feature | Status | Notes |
+|---------|--------|-------|
 | Tracing Spans | ✅ Implemented | `otel` feature, OpenTelemetry 0.31+ |
 | SQL Sanitization | ✅ Implemented | Configurable for safe logging |
 | Error Recording | ✅ Implemented | Via span events |
@@ -483,8 +491,8 @@ We prioritize features based on community need and alignment with the driver's g
 
 ### Security Matrix
 
-| Feature | v0.1.x Status | Notes |
-|---------|---------------|-------|
+| Feature | Status | Notes |
+|---------|--------|-------|
 | TLS Encryption | ✅ Implemented | Via rustls |
 | TLS 1.2/1.3 | ✅ Implemented | Configurable |
 | Certificate Validation | ✅ Implemented | Configurable |
@@ -495,8 +503,8 @@ We prioritize features based on community need and alignment with the driver's g
 
 ### SQL Server Version Support
 
-| Version | v0.1.x Status | Notes |
-|---------|---------------|-------|
+| Version | Status | Notes |
+|---------|--------|-------|
 | SQL Server 2022 | ✅ Supported | TDS 8.0 |
 | SQL Server 2019 | ✅ Supported | TDS 7.4 |
 | SQL Server 2017 | ✅ Supported | TDS 7.4 |

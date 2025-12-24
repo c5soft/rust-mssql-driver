@@ -1,7 +1,7 @@
 # Architectural Reference: High-Performance Rust MS SQL Driver
 
-**Version:** 1.1.0
-**Status:** Design Complete (Revised)  
+**Version:** 1.2.0
+**Status:** Design Complete (v0.2.0 Released)  
 **Target Protocol:** MS-TDS 7.4 – 8.0 (SQL Server 2016 – 2025)  
 **Toolchain Standard:** Rust 2024 Edition (v1.85+, released February 20, 2025)  
 **MSRV Policy:** Rust 1.85.0 (6-month rolling window)
@@ -696,7 +696,7 @@ resolver = "2"
 members = ["crates/*", "xtask"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -842,15 +842,20 @@ let result = bulk.finish().await?;
 
 ### ADR-013: Always Encrypted Support
 
-**Status:** Deferred to v2.0
+**Status:** Partial (Cryptography ✅, Key Providers ⏳)
 
-**Decision:** Always Encrypted client-side encryption is out of scope for v1.0.
+**Decision:** Always Encrypted client-side encryption is partially implemented. The cryptographic infrastructure is complete; production key providers are planned for v0.3.0.
 
-**Rationale:**
-- Requires integration with Azure Key Vault or Windows Certificate Store
-- Complex key management and caching logic
-- Significant testing surface area
-- Can be added as a feature flag in v2.0 without breaking API changes
+**Implemented (v0.2.0):**
+- AEAD_AES_256_CBC_HMAC_SHA256 encryption/decryption
+- RSA-OAEP key unwrapping for CEK decryption
+- CEK caching with TTL expiration
+- InMemoryKeyStore for testing/development
+- `KeyStoreProvider` trait for custom implementations
+
+**Pending (v0.3.0):**
+- Azure Key Vault key provider
+- Windows Certificate Store key provider
 
 **Security Guidance:**
 
@@ -868,9 +873,12 @@ Always Encrypted provides **client-side encryption** where keys never reach the 
 
 **⚠️ Important:** T-SQL encryption functions (`ENCRYPTBYKEY`/`DECRYPTBYKEY`) provide **server-side encryption** where keys exist within SQL Server. They do **NOT** provide the same security guarantees as Always Encrypted and should not be considered a substitute.
 
-**Workaround:**
-- **If you require protection from server-side threats** (malicious DBAs, server compromise, cloud operator access): Use Microsoft's ODBC or OLE DB drivers with Always Encrypted support until v2.0.
-- **If your threat model excludes server-side actors:** T-SQL encryption functions may be appropriate for your use case.
+**Current Options:**
+- **For development/testing:** Use the `InMemoryKeyStore` with the `always-encrypted` feature
+- **For custom key storage:** Implement the `KeyStoreProvider` trait for your key management solution
+- **For Azure Key Vault/Windows CertStore:** Wait for v0.3.0 or implement the `KeyStoreProvider` trait
+- **Alternative:** Use application-layer encryption before sending data to SQL Server
+- **Do NOT use `ENCRYPTBYKEY`** as a workaround - it does not provide the same security guarantees
 
 **References:**
 - [Always Encrypted Overview](https://learn.microsoft.com/en-us/sql/relational-databases/security/encryption/always-encrypted-database-engine)
@@ -1903,13 +1911,15 @@ msrv:
 - [x] Implement IO splitting for cancellation
 - [x] Integration tests with mock server
 
-### Phase 5: Authentication (Tier 1 ✅, Tier 2-3 ⏳ Planned v0.2)
+### Phase 5: Authentication ✅ Complete
 
 **`mssql-auth` crate:**
 - [x] Implement SQL Authentication (Login7 flow)
 - [x] Implement Azure AD token authentication
-- [ ] Add `azure-identity` feature for Managed Identity (v0.2.0)
-- [ ] Add `integrated-auth` feature (Kerberos/NTLM) (v0.2.0)
+- [x] Add `azure-identity` feature for Managed Identity
+- [x] Add `integrated-auth` feature (Kerberos/GSSAPI)
+- [x] Add `sspi-auth` feature (cross-platform SSPI via sspi-rs)
+- [x] Add `cert-auth` feature (client certificate authentication)
 
 ### Phase 6: Client API ✅ Complete
 
@@ -1944,10 +1954,10 @@ msrv:
 
 **`mssql-derive` crate:**
 - [x] Implement `#[derive(FromRow)]`
-- [ ] Implement `#[derive(ToSql)]` (v0.2.0)
-- [ ] Implement `#[derive(Tvp)]` (v0.2.0)
+- [x] Implement `#[derive(ToParams)]`
+- [ ] Implement `#[derive(Tvp)]` (v0.3.0)
 
-### Phase 10: Release Preparation ✅ v0.1.0 Released
+### Phase 10: Release Preparation ✅ v0.2.0 Released
 
 - [x] API review and stabilization
 - [x] Security audit (cargo-deny, cargo-audit)
@@ -1955,18 +1965,29 @@ msrv:
 - [x] Migration guide from `tiberius`
 - [x] Publish to crates.io
 
+### v0.2.0 Delivered Features
+
+- [x] Table-Valued Parameters (TVP) via `Tvp` type
+- [x] Azure Managed Identity (`azure-identity` feature)
+- [x] Integrated authentication (`integrated-auth` feature)
+- [x] SSPI authentication (`sspi-auth` feature)
+- [x] Client certificate authentication (`cert-auth` feature)
+- [x] Query cancellation with ATTENTION packets
+- [x] Per-query timeouts
+- [x] OpenTelemetry metrics (`DatabaseMetrics`)
+- [x] Always Encrypted cryptography (AEAD, RSA-OAEP, CEK caching)
+
 ### Future Releases
 
-**v0.2.0 Roadmap:**
-- [ ] Table-Valued Parameters (TVP)
-- [ ] Azure Managed Identity (`azure-identity` feature)
-- [ ] Integrated authentication (`integrated-auth` feature)
-- [ ] `#[derive(ToSql)]` and `#[derive(Tvp)]` macros
+**v0.3.0 Roadmap:**
+- [ ] Always Encrypted key providers (Azure KeyVault, Windows CertStore)
+- [ ] `#[derive(Tvp)]` macro
+- [ ] TTL-based pool connection expiration
+- [ ] Streaming LOB support
 
-**v0.3.0+ Roadmap:**
-- [ ] Always Encrypted client-side encryption
+**v1.0.0+ Roadmap:**
 - [ ] Connection resiliency improvements
-- [ ] Additional authentication methods
+- [ ] Change Tracking integration
 
 ---
 
@@ -2000,14 +2021,20 @@ msrv:
 
 ### 8.3 Feature Flag Matrix
 
-| Feature | Default | Dependencies Added |
-|---------|---------|-------------------|
-| `default` | ✅ | Core functionality |
-| `azure-identity` | ❌ | `azure_identity` |
-| `integrated-auth` | ❌ | `gssapi` (Linux), `sspi-rs` (Windows) |
-| `cert-auth` | ❌ | None (uses rustls) |
-| `otel` | ❌ | `opentelemetry`, `tracing-opentelemetry` |
-| `rustls` | ✅ | `rustls`, `tokio-rustls` |
+| Feature | Default | Dependencies Added | Status |
+|---------|---------|-------------------|--------|
+| `default` | ✅ | Core functionality | Stable |
+| `chrono` | ✅ | `chrono` for date/time types | Stable |
+| `uuid` | ✅ | `uuid` for UNIQUEIDENTIFIER | Stable |
+| `decimal` | ✅ | `rust_decimal` for DECIMAL/NUMERIC | Stable |
+| `json` | ❌ | `serde_json` for JSON parsing | Stable |
+| `azure-identity` | ❌ | `azure_identity` | Stable |
+| `integrated-auth` | ❌ | `gssapi` (Linux/macOS) | Stable |
+| `sspi-auth` | ❌ | `sspi-rs` (cross-platform) | Stable |
+| `cert-auth` | ❌ | None (uses rustls) | Stable |
+| `otel` | ❌ | `opentelemetry`, `tracing-opentelemetry` | Stable |
+| `zeroize` | ❌ | `zeroize` for credential cleanup | Stable |
+| `always-encrypted` | ❌ | Cryptography dependencies | Stable (key providers pending) |
 
 ### 8.4 Migration Guide from Tiberius
 
@@ -2115,6 +2142,7 @@ let client = Client::connect(&connection_string).await?;
 |---------|------|---------|
 | 1.0.0 | 2025-12-11 | Initial comprehensive specification |
 | 1.1.0 | 2025-12-11 | Security guidance corrections (ADR-013 Always Encrypted), savepoint validation, prepared statement lifecycle (§4.5), Azure SQL routing (§4.6), OpenTelemetry 0.31, version constraint policy, cargo-deny/hakari integration, native async trait guidance, migration guide updates |
+| 1.2.0 | 2025-12-24 | Updated for v0.2.0 release: Phase 5 auth complete, ADR-013 status updated (cryptography implemented), feature flag matrix expanded, v0.2.0 delivered features documented, v0.3.0 roadmap updated |
 
 ---
 

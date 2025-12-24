@@ -17,7 +17,7 @@ A high-performance MS SQL Server driver for Rust that aims to surpass `prisma/ti
 
 ## Key Architecture Decisions
 
-Refer to `ARCHITECTURE.md` (v1.1.0) for complete details. Critical decisions:
+Refer to `ARCHITECTURE.md` (v1.2.0) for complete details. Critical decisions:
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
@@ -39,10 +39,11 @@ Refer to `ARCHITECTURE.md` (v1.1.0) for complete details. Critical decisions:
 | DBA Access | Cannot see plaintext | Can see plaintext |
 | Threat Model | Protects FROM server | Protects ON server |
 
-If Always Encrypted is needed and not yet implemented:
-1. Use application-layer encryption before SQL
-2. Wait for proper implementation
-3. **Do NOT use ENCRYPTBYKEY** - it does not provide the same security guarantees
+Always Encrypted cryptography is implemented via the `always-encrypted` feature. Key providers (Azure Key Vault, Windows CertStore) are pending for v0.3.0. Options:
+1. Use `InMemoryKeyStore` for development/testing
+2. Implement the `KeyStoreProvider` trait for custom key storage
+3. Use application-layer encryption as an alternative
+4. **Do NOT use ENCRYPTBYKEY** - it does not provide the same security guarantees
 
 ### Savepoint Name Validation
 
@@ -194,6 +195,6 @@ Key differences for migrators:
 
 ## Document References
 
-- `ARCHITECTURE.md` - Complete architecture specification (v1.1.0)
+- `ARCHITECTURE.md` - Complete architecture specification (v1.2.0)
 - MS-TDS Protocol Spec - Microsoft documentation
 - Tiberius source - `/tmp/tiberius/` (reference only)

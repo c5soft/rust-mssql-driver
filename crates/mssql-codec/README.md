@@ -1,5 +1,7 @@
 # mssql-codec
 
+> Part of the [rust-mssql-driver](../../README.md) project.
+
 Async framing layer for TDS packet handling.
 
 ## Overview
