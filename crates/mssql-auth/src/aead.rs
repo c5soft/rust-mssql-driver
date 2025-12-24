@@ -68,7 +68,10 @@ type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 /// - `enc_key`: Used for AES-256-CBC encryption/decryption
 /// - `mac_key`: Used for HMAC-SHA256 authentication
 /// - `iv_key`: Used for deterministic IV generation
+///
+/// Keys are securely zeroized on drop when the `zeroize` feature is enabled.
 #[derive(Clone)]
+#[cfg_attr(feature = "zeroize", derive(zeroize::Zeroize, zeroize::ZeroizeOnDrop))]
 pub struct DerivedKeys {
     /// Encryption key for AES-256-CBC.
     enc_key: [u8; AES_KEY_SIZE],
@@ -167,9 +170,14 @@ impl DerivedKeys {
     }
 }
 
+// Manual Drop implementation for zeroization when `zeroize` feature is not enabled.
+// When `zeroize` is enabled, `ZeroizeOnDrop` derive handles this automatically.
+#[cfg(not(feature = "zeroize"))]
 impl Drop for DerivedKeys {
     fn drop(&mut self) {
-        // Zeroize keys on drop for security
+        // Zeroize keys on drop for security.
+        // Note: This basic approach may be optimized away by the compiler.
+        // Enable the `zeroize` feature for guaranteed secure zeroization.
         self.enc_key.fill(0);
         self.mac_key.fill(0);
         self.iv_key.fill(0);
