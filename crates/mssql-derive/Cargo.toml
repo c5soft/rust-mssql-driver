@@ -17,14 +17,8 @@ proc-macro2 = "1.0"
 quote = "1.0"
 syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }
 
-[dev-dependencies]
-mssql-types = { workspace = true }
-mssql-client = { workspace = true }
-trybuild = "1.0"
-
-[package.metadata.cargo-machete]
-# trybuild is for compile-fail tests, mssql-client for testing derived impls
-ignored = ["trybuild", "mssql-client"]
+# Note: Integration tests for derive macros are in mssql-client's test suite
+# to avoid circular dev-dependency (mssql-derive <-> mssql-client)
 
 [lints]
 workspace = true
