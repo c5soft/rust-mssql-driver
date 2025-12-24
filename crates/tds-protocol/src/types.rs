@@ -188,10 +188,25 @@ impl TypeId {
         !self.is_fixed_length()
     }
 
-    /// Check if this type uses PLP (Partially Length-Prefixed) encoding.
+    /// Check if this type always uses PLP (Partially Length-Prefixed) encoding.
+    ///
+    /// Note: `NVarChar`, `BigVarChar`, and `BigVarBinary` also use PLP encoding
+    /// when declared as MAX types (max_length == 0xFFFF). This function only
+    /// returns true for types that *always* use PLP.
     #[must_use]
     pub const fn is_plp(&self) -> bool {
         matches!(self, Self::Text | Self::Image | Self::NText | Self::Xml)
+    }
+
+    /// Check if this type can use PLP encoding when declared as MAX.
+    ///
+    /// Returns true for types that use PLP when max_length == 0xFFFF:
+    /// - NVARCHAR(MAX)
+    /// - VARCHAR(MAX)
+    /// - VARBINARY(MAX)
+    #[must_use]
+    pub const fn can_be_max(&self) -> bool {
+        matches!(self, Self::NVarChar | Self::BigVarChar | Self::BigVarBinary)
     }
 
     /// Check if this is a Unicode type.

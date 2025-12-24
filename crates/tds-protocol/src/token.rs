@@ -914,13 +914,33 @@ impl RawRow {
                 Self::decode_bytelen_type(src, dst)?;
             }
 
-            // 2-byte length strings
-            TypeId::BigVarChar | TypeId::BigChar | TypeId::BigVarBinary | TypeId::BigBinary => {
+            // 2-byte length strings (or PLP for MAX types)
+            TypeId::BigVarChar | TypeId::BigVarBinary => {
+                // max_length == 0xFFFF indicates VARCHAR(MAX) or VARBINARY(MAX), which uses PLP
+                if col.type_info.max_length == Some(0xFFFF) {
+                    Self::decode_plp_type(src, dst)?;
+                } else {
+                    Self::decode_ushortlen_type(src, dst)?;
+                }
+            }
+
+            // Fixed-length types that don't have MAX variants
+            TypeId::BigChar | TypeId::BigBinary => {
                 Self::decode_ushortlen_type(src, dst)?;
             }
 
-            // Unicode strings (2-byte length in bytes, not characters)
-            TypeId::NChar | TypeId::NVarChar => {
+            // Unicode strings (2-byte length in bytes, or PLP for NVARCHAR(MAX))
+            TypeId::NVarChar => {
+                // max_length == 0xFFFF indicates NVARCHAR(MAX), which uses PLP
+                if col.type_info.max_length == Some(0xFFFF) {
+                    Self::decode_plp_type(src, dst)?;
+                } else {
+                    Self::decode_ushortlen_type(src, dst)?;
+                }
+            }
+
+            // Fixed-length NCHAR doesn't have MAX variant
+            TypeId::NChar => {
                 Self::decode_ushortlen_type(src, dst)?;
             }
 
