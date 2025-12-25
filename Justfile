@@ -764,7 +764,9 @@ semver:
     # Exclude mssql-testing: testcontainers -> home@0.5.12 requires Rust 1.88,
     # but we support MSRV 1.85. Testing utilities have relaxed API stability requirements.
     # Re-enable when upstream testcontainers updates their dependencies.
-    {{cargo}} semver-checks check-release --exclude mssql-testing
+    # NOTE: cargo-semver-checks requires Rust 1.89+, so we explicitly use +stable
+    # even though the project MSRV is 1.85 (set in rust-toolchain.toml).
+    {{cargo}} +stable semver-checks check-release --exclude mssql-testing
     printf '{{green}}[OK]{{reset}}   Semver check passed\n'
 
 [group('lint')]
