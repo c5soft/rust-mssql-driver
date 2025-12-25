@@ -102,7 +102,6 @@ APIs behind these feature flags depend on platform-specific libraries and may ha
 
 | API | Reason |
 |-----|--------|
-| `BlobReader::*` | Streaming implementation incomplete |
 | `Client::with_raw_connection()` | Low-level access, may change |
 
 ## Deprecation Policy

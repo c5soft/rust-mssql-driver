@@ -6,7 +6,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use mssql_client::{Client, Config as ClientConfig, Ready};
 use parking_lot::Mutex;
@@ -65,7 +65,6 @@ struct PooledEntry {
 
 struct PoolInner {
     /// Pool configuration.
-    #[allow(dead_code)] // Used for idle timeout, health checks, etc.
     config: PoolConfig,
 
     /// Whether the pool is closed.
@@ -91,6 +90,9 @@ struct PoolInner {
 
     /// Total connections created.
     total_connections: AtomicU64,
+
+    /// Number of tasks waiting for a connection.
+    wait_queue_depth: AtomicU64,
 }
 
 /// Internal metrics tracking.
@@ -112,6 +114,18 @@ struct PoolMetricsInner {
     resets_performed: u64,
     /// Total reset failures.
     resets_failed: u64,
+    /// Connections closed due to idle timeout.
+    connections_idle_expired: u64,
+    /// Connections closed due to max lifetime.
+    connections_lifetime_expired: u64,
+    /// Reaper task runs.
+    reaper_runs: u64,
+    /// Peak wait queue depth observed.
+    peak_wait_queue_depth: u64,
+    /// Total connection acquisition time in microseconds.
+    total_acquisition_time_us: u64,
+    /// Number of acquisitions for averaging.
+    acquisition_count: u64,
 }
 
 impl Pool {
@@ -139,12 +153,22 @@ impl Pool {
             semaphore: Arc::new(Semaphore::new(config.max_connections as usize)),
             in_use_count: AtomicU64::new(0),
             total_connections: AtomicU64::new(0),
+            wait_queue_depth: AtomicU64::new(0),
+        });
+
+        // Start the reaper task for connection cleanup
+        let reaper_inner = Arc::clone(&inner);
+        let reaper_interval = config.health_check_interval;
+        tokio::spawn(async move {
+            Self::reaper_task(reaper_inner, reaper_interval).await;
         });
 
         tracing::info!(
             min = config.min_connections,
             max = config.max_connections,
-            "connection pool created"
+            idle_timeout_secs = config.idle_timeout.as_secs(),
+            max_lifetime_secs = config.max_lifetime.as_secs(),
+            "connection pool created with reaper task"
         );
 
         Ok(Self {
@@ -154,6 +178,96 @@ impl Pool {
         })
     }
 
+    /// Background reaper task that cleans up expired connections.
+    ///
+    /// This task runs periodically and:
+    /// - Removes connections that exceed `max_lifetime`
+    /// - Removes connections that exceed `idle_timeout` (keeping at least `min_connections`)
+    async fn reaper_task(inner: Arc<PoolInner>, interval: Duration) {
+        let mut ticker = tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        loop {
+            ticker.tick().await;
+
+            // Check if pool is closed
+            if inner.closed.load(Ordering::Acquire) {
+                tracing::debug!("reaper task stopping: pool closed");
+                break;
+            }
+
+            // Collect expired connections
+            let mut expired_lifetime = 0u64;
+            let mut expired_idle = 0u64;
+
+            {
+                let mut idle = inner.idle_connections.lock();
+                let idle_count_before = idle.len();
+                let min_connections = inner.config.min_connections as usize;
+
+                // Remove connections that exceed max_lifetime first
+                idle.retain(|entry| {
+                    if entry.metadata.is_expired(inner.config.max_lifetime) {
+                        expired_lifetime += 1;
+                        tracing::debug!(
+                            connection_id = entry.metadata.id,
+                            age_secs = entry.metadata.created_at.elapsed().as_secs(),
+                            "closing connection: max lifetime exceeded"
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                });
+
+                // Remove connections that exceed idle_timeout, but keep min_connections
+                if idle.len() > min_connections {
+                    let mut new_idle = VecDeque::with_capacity(idle.len());
+                    for entry in idle.drain(..) {
+                        if new_idle.len() >= min_connections
+                            && entry.metadata.is_idle_expired(inner.config.idle_timeout)
+                        {
+                            expired_idle += 1;
+                            tracing::debug!(
+                                connection_id = entry.metadata.id,
+                                idle_secs = entry.metadata.last_used_at.elapsed().as_secs(),
+                                "closing connection: idle timeout exceeded"
+                            );
+                        } else {
+                            new_idle.push_back(entry);
+                        }
+                    }
+                    *idle = new_idle;
+                }
+
+                let idle_count_after = idle.len();
+                if idle_count_before != idle_count_after {
+                    tracing::info!(
+                        removed = idle_count_before - idle_count_after,
+                        remaining = idle_count_after,
+                        "reaper cleaned up idle connections"
+                    );
+                }
+            }
+
+            // Update metrics
+            if expired_lifetime > 0 || expired_idle > 0 {
+                let mut metrics = inner.metrics.lock();
+                metrics.connections_closed += expired_lifetime + expired_idle;
+                metrics.connections_lifetime_expired += expired_lifetime;
+                metrics.connections_idle_expired += expired_idle;
+                metrics.reaper_runs += 1;
+
+                // Release semaphore permits for closed connections
+                inner
+                    .semaphore
+                    .add_permits((expired_lifetime + expired_idle) as usize);
+            } else {
+                inner.metrics.lock().reaper_runs += 1;
+            }
+        }
+    }
+
     /// Get a connection from the pool.
     ///
     /// This will either return an existing idle connection or create a new one
@@ -161,11 +275,22 @@ impl Pool {
     /// pool is at capacity, this will wait until a connection becomes available
     /// or the timeout is reached.
     pub async fn get(&self) -> Result<PooledConnection, PoolError> {
+        let acquisition_start = Instant::now();
+
         if self.inner.closed.load(Ordering::Acquire) {
             return Err(PoolError::PoolClosed);
         }
 
         tracing::trace!("acquiring connection from pool");
+
+        // Track wait queue depth
+        let current_depth = self.inner.wait_queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
+        {
+            let mut metrics = self.inner.metrics.lock();
+            if current_depth > metrics.peak_wait_queue_depth {
+                metrics.peak_wait_queue_depth = current_depth;
+            }
+        }
 
         // Try to acquire semaphore permit with timeout
         let permit = match timeout(
@@ -174,23 +299,49 @@ impl Pool {
         )
         .await
         {
-            Ok(Ok(permit)) => permit,
+            Ok(Ok(permit)) => {
+                self.inner.wait_queue_depth.fetch_sub(1, Ordering::Relaxed);
+                permit
+            }
             Ok(Err(_)) => {
                 // Semaphore was closed (pool shut down)
+                self.inner.wait_queue_depth.fetch_sub(1, Ordering::Relaxed);
                 self.inner.metrics.lock().checkouts_failed += 1;
                 return Err(PoolError::PoolClosed);
             }
             Err(_) => {
                 // Timeout waiting for semaphore
+                self.inner.wait_queue_depth.fetch_sub(1, Ordering::Relaxed);
                 self.inner.metrics.lock().checkouts_failed += 1;
                 return Err(PoolError::Timeout);
             }
         };
 
-        // Try to get an idle connection first
-        let entry = {
-            let mut idle = self.inner.idle_connections.lock();
-            idle.pop_front()
+        // Try to get an idle connection first, skipping expired ones
+        let entry = loop {
+            let candidate = {
+                let mut idle = self.inner.idle_connections.lock();
+                idle.pop_front()
+            };
+
+            match candidate {
+                Some(entry) => {
+                    // Check if connection exceeds max_lifetime
+                    if entry.metadata.is_expired(self.config.max_lifetime) {
+                        tracing::debug!(
+                            connection_id = entry.metadata.id,
+                            "discarding expired connection on checkout"
+                        );
+                        let mut metrics = self.inner.metrics.lock();
+                        metrics.connections_closed += 1;
+                        metrics.connections_lifetime_expired += 1;
+                        // Don't return permit - we'll try to get another connection
+                        continue;
+                    }
+                    break Some(entry);
+                }
+                None => break None,
+            }
         };
 
         let (client, mut metadata) = match entry {
@@ -219,10 +370,17 @@ impl Pool {
             }
         };
 
-        // Mark as in use
+        // Mark as in use and record acquisition time
         metadata.mark_checkout();
         self.inner.in_use_count.fetch_add(1, Ordering::Relaxed);
-        self.inner.metrics.lock().checkouts_successful += 1;
+
+        let acquisition_time_us = acquisition_start.elapsed().as_micros() as u64;
+        {
+            let mut metrics = self.inner.metrics.lock();
+            metrics.checkouts_successful += 1;
+            metrics.total_acquisition_time_us += acquisition_time_us;
+            metrics.acquisition_count += 1;
+        }
 
         Ok(PooledConnection {
             client: Some(client),
@@ -291,18 +449,31 @@ impl Pool {
     pub fn status(&self) -> PoolStatus {
         let idle = self.inner.idle_connections.lock().len() as u32;
         let in_use = self.inner.in_use_count.load(Ordering::Relaxed) as u32;
+        let wait_queue_depth = self.inner.wait_queue_depth.load(Ordering::Relaxed) as u32;
         PoolStatus {
             available: idle,
             in_use,
             total: idle + in_use,
             max: self.config.max_connections,
+            wait_queue_depth,
         }
+    }
+
+    /// Get the current wait queue depth (tasks waiting for a connection).
+    #[must_use]
+    pub fn wait_queue_depth(&self) -> u32 {
+        self.inner.wait_queue_depth.load(Ordering::Relaxed) as u32
     }
 
     /// Get pool metrics.
     #[must_use]
     pub fn metrics(&self) -> PoolMetrics {
         let inner = self.inner.metrics.lock();
+        let avg_acquisition_time_us = if inner.acquisition_count > 0 {
+            inner.total_acquisition_time_us / inner.acquisition_count
+        } else {
+            0
+        };
         PoolMetrics {
             connections_created: inner.connections_created,
             connections_closed: inner.connections_closed,
@@ -312,6 +483,11 @@ impl Pool {
             health_checks_failed: inner.health_checks_failed,
             resets_performed: inner.resets_performed,
             resets_failed: inner.resets_failed,
+            connections_idle_expired: inner.connections_idle_expired,
+            connections_lifetime_expired: inner.connections_lifetime_expired,
+            reaper_runs: inner.reaper_runs,
+            peak_wait_queue_depth: inner.peak_wait_queue_depth,
+            avg_acquisition_time_us,
             uptime: self.inner.created_at.elapsed(),
         }
     }
@@ -437,7 +613,11 @@ impl Default for PoolBuilder {
 }
 
 /// Status information about the pool.
+///
+/// This struct is marked `#[non_exhaustive]` to allow adding new fields
+/// in future minor versions without breaking changes.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct PoolStatus {
     /// Number of idle connections available.
     pub available: u32,
@@ -447,6 +627,8 @@ pub struct PoolStatus {
     pub total: u32,
     /// Maximum allowed connections.
     pub max: u32,
+    /// Number of tasks currently waiting for a connection.
+    pub wait_queue_depth: u32,
 }
 
 impl PoolStatus {
@@ -464,10 +646,20 @@ impl PoolStatus {
     pub fn is_at_capacity(&self) -> bool {
         self.total >= self.max
     }
+
+    /// Check if there are tasks waiting for connections.
+    #[must_use]
+    pub fn has_waiters(&self) -> bool {
+        self.wait_queue_depth > 0
+    }
 }
 
 /// Metrics collected from the pool.
+///
+/// This struct is marked `#[non_exhaustive]` to allow adding new fields
+/// in future minor versions without breaking changes.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct PoolMetrics {
     /// Total connections created since pool start.
     pub connections_created: u64,
@@ -485,6 +677,16 @@ pub struct PoolMetrics {
     pub resets_performed: u64,
     /// Connection resets that failed.
     pub resets_failed: u64,
+    /// Connections closed due to idle timeout expiration.
+    pub connections_idle_expired: u64,
+    /// Connections closed due to max lifetime expiration.
+    pub connections_lifetime_expired: u64,
+    /// Number of reaper task runs.
+    pub reaper_runs: u64,
+    /// Peak wait queue depth observed.
+    pub peak_wait_queue_depth: u64,
+    /// Average connection acquisition time in microseconds.
+    pub avg_acquisition_time_us: u64,
     /// Time since pool creation.
     pub uptime: std::time::Duration,
 }
@@ -508,6 +710,12 @@ impl PoolMetrics {
         }
         let successful = self.health_checks_performed - self.health_checks_failed;
         successful as f64 / self.health_checks_performed as f64
+    }
+
+    /// Get the average acquisition time as a Duration.
+    #[must_use]
+    pub fn avg_acquisition_time(&self) -> std::time::Duration {
+        std::time::Duration::from_micros(self.avg_acquisition_time_us)
     }
 }
 
@@ -645,6 +853,7 @@ mod tests {
             in_use: 5,
             total: 10,
             max: 20,
+            wait_queue_depth: 0,
         };
         assert!((status.utilization() - 25.0).abs() < f64::EPSILON);
     }
@@ -656,6 +865,7 @@ mod tests {
             in_use: 10,
             total: 10,
             max: 10,
+            wait_queue_depth: 0,
         };
         assert!(status.is_at_capacity());
 
@@ -664,8 +874,30 @@ mod tests {
             in_use: 5,
             total: 10,
             max: 20,
+            wait_queue_depth: 0,
         };
         assert!(!status2.is_at_capacity());
+    }
+
+    #[test]
+    fn test_pool_status_has_waiters() {
+        let status_no_waiters = PoolStatus {
+            available: 5,
+            in_use: 5,
+            total: 10,
+            max: 20,
+            wait_queue_depth: 0,
+        };
+        assert!(!status_no_waiters.has_waiters());
+
+        let status_with_waiters = PoolStatus {
+            available: 0,
+            in_use: 10,
+            total: 10,
+            max: 10,
+            wait_queue_depth: 3,
+        };
+        assert!(status_with_waiters.has_waiters());
     }
 
     #[test]
@@ -679,6 +911,11 @@ mod tests {
             health_checks_failed: 5,
             resets_performed: 80,
             resets_failed: 2,
+            connections_idle_expired: 1,
+            connections_lifetime_expired: 1,
+            reaper_runs: 5,
+            peak_wait_queue_depth: 3,
+            avg_acquisition_time_us: 500,
             uptime: std::time::Duration::from_secs(3600),
         };
 

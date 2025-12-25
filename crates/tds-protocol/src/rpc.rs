@@ -319,7 +319,11 @@ impl TypeInfo {
 
     /// Encode type info to buffer.
     pub fn encode(&self, buf: &mut BytesMut) {
-        buf.put_u8(self.type_id);
+        // TVP (0xF3) has type_id embedded in the value data itself
+        // (written by TvpEncoder::encode_metadata), so don't write it here
+        if self.type_id != 0xF3 {
+            buf.put_u8(self.type_id);
+        }
 
         // Variable-length types need max length
         match self.type_id {
@@ -502,6 +506,12 @@ impl RpcParam {
                 0x6C => {
                     // DECIMALNTYPE
                     buf.put_u8(value.len() as u8);
+                    buf.put_slice(value);
+                }
+                0xF3 => {
+                    // TVP (Table-Valued Parameter)
+                    // TVP values are self-delimiting: they contain complete metadata,
+                    // row data, and end token (TVP_END_TOKEN = 0x00). No length prefix.
                     buf.put_slice(value);
                 }
                 _ => {

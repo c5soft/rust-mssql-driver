@@ -842,9 +842,9 @@ let result = bulk.finish().await?;
 
 ### ADR-013: Always Encrypted Support
 
-**Status:** Partial (Cryptography ✅, Key Providers ⏳)
+**Status:** Implemented ✅
 
-**Decision:** Always Encrypted client-side encryption is partially implemented. The cryptographic infrastructure is complete; production key providers are planned for v0.3.0.
+**Decision:** Always Encrypted client-side encryption is fully implemented with production-ready key providers.
 
 **Implemented (v0.2.0):**
 - AEAD_AES_256_CBC_HMAC_SHA256 encryption/decryption
@@ -853,9 +853,9 @@ let result = bulk.finish().await?;
 - InMemoryKeyStore for testing/development
 - `KeyStoreProvider` trait for custom implementations
 
-**Pending (v0.3.0):**
-- Azure Key Vault key provider
-- Windows Certificate Store key provider
+**Implemented (v0.3.0):**
+- `AzureKeyVaultProvider` for Azure Key Vault integration (`azure-keyvault` feature)
+- `WindowsCertStoreProvider` for Windows Certificate Store (`windows-certstore` feature, Windows only)
 
 **Security Guidance:**
 
@@ -873,12 +873,13 @@ Always Encrypted provides **client-side encryption** where keys never reach the 
 
 **⚠️ Important:** T-SQL encryption functions (`ENCRYPTBYKEY`/`DECRYPTBYKEY`) provide **server-side encryption** where keys exist within SQL Server. They do **NOT** provide the same security guarantees as Always Encrypted and should not be considered a substitute.
 
-**Current Options:**
+**Available Key Providers:**
 - **For development/testing:** Use the `InMemoryKeyStore` with the `always-encrypted` feature
+- **For Azure Key Vault:** Use `AzureKeyVaultProvider` with the `azure-keyvault` feature
+- **For Windows Certificate Store:** Use `WindowsCertStoreProvider` with the `windows-certstore` feature
 - **For custom key storage:** Implement the `KeyStoreProvider` trait for your key management solution
-- **For Azure Key Vault/Windows CertStore:** Wait for v0.3.0 or implement the `KeyStoreProvider` trait
-- **Alternative:** Use application-layer encryption before sending data to SQL Server
-- **Do NOT use `ENCRYPTBYKEY`** as a workaround - it does not provide the same security guarantees
+
+**⚠️ Do NOT use `ENCRYPTBYKEY`** as a workaround - it does not provide the same security guarantees
 
 **References:**
 - [Always Encrypted Overview](https://learn.microsoft.com/en-us/sql/relational-databases/security/encryption/always-encrypted-database-engine)
@@ -1979,15 +1980,17 @@ msrv:
 
 ### Future Releases
 
-**v0.3.0 Roadmap:**
-- [ ] Always Encrypted key providers (Azure KeyVault, Windows CertStore)
+**v0.3.0 Delivered:**
+- [x] Always Encrypted key providers (Azure KeyVault, Windows CertStore)
+- [x] Streaming LOB API (`Row::get_stream()` → `BlobReader`)
+- [x] Change Tracking integration (`ChangeTrackingQuery`, `ChangeOperation`)
+
+**v0.4.0 Roadmap:**
 - [ ] `#[derive(Tvp)]` macro
-- [ ] TTL-based pool connection expiration
-- [ ] Streaming LOB support
+- [ ] True network-level LOB streaming
 
 **v1.0.0+ Roadmap:**
 - [ ] Connection resiliency improvements
-- [ ] Change Tracking integration
 
 ---
 

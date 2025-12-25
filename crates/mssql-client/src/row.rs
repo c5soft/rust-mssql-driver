@@ -19,6 +19,8 @@ use bytes::Bytes;
 use mssql_types::decode::{TypeInfo, decode_value};
 use mssql_types::{FromSql, SqlValue, TypeError};
 
+use crate::blob::BlobReader;
+
 /// Column slice information pointing into the row buffer.
 ///
 /// This is the internal representation that enables zero-copy access
@@ -341,6 +343,77 @@ impl Row {
     #[must_use]
     pub fn get_string(&self, index: usize) -> Option<String> {
         self.get_str(index).map(|cow| cow.into_owned())
+    }
+
+    // ========================================================================
+    // Streaming Access (LOB support)
+    // ========================================================================
+
+    /// Get a streaming reader for a binary/text column.
+    ///
+    /// Returns a [`BlobReader`] that implements [`tokio::io::AsyncRead`] for
+    /// streaming access to large binary or text columns. This is useful for:
+    ///
+    /// - Streaming large data to files without fully loading into memory
+    /// - Processing data in chunks with progress tracking
+    /// - Copying data between I/O destinations efficiently
+    ///
+    /// # Supported Column Types
+    ///
+    /// - `VARBINARY`, `VARBINARY(MAX)`
+    /// - `VARCHAR`, `VARCHAR(MAX)`
+    /// - `NVARCHAR`, `NVARCHAR(MAX)`
+    /// - `TEXT`, `NTEXT`, `IMAGE` (legacy types)
+    /// - `XML`
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use tokio::io::AsyncWriteExt;
+    ///
+    /// // Stream a large VARBINARY(MAX) column to a file
+    /// let mut reader = row.get_stream(0)?;
+    /// let mut file = tokio::fs::File::create("output.bin").await?;
+    /// tokio::io::copy(&mut reader, &mut file).await?;
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// - `Some(BlobReader)` if the column contains binary/text data
+    /// - `None` if the column is NULL or the index is out of bounds
+    #[must_use]
+    pub fn get_stream(&self, index: usize) -> Option<BlobReader> {
+        let slice = self.slices.get(index)?;
+        if slice.is_null {
+            return None;
+        }
+
+        let start = slice.offset as usize;
+        let end = start + slice.length as usize;
+
+        if end <= self.buffer.len() {
+            // Use zero-copy slicing from Arc<Bytes>
+            let data = self.buffer.slice(start..end);
+            Some(BlobReader::from_bytes(data))
+        } else {
+            None
+        }
+    }
+
+    /// Get a streaming reader for a binary/text column by name.
+    ///
+    /// See [`get_stream`](Self::get_stream) for details.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut reader = row.get_stream_by_name("document_content")?;
+    /// // Process the blob stream...
+    /// ```
+    #[must_use]
+    pub fn get_stream_by_name(&self, name: &str) -> Option<BlobReader> {
+        let index = self.metadata.find_by_name(name)?;
+        self.get_stream(index)
     }
 
     // ========================================================================
@@ -690,5 +763,62 @@ mod tests {
         assert_eq!(row.columns().len(), 1);
         assert_eq!(row.columns()[0].name, "col1");
         assert_eq!(row.metadata().len(), 1);
+    }
+
+    #[test]
+    fn test_row_get_stream() {
+        let buffer = Arc::new(Bytes::from_static(b"Hello, World!"));
+        let slices: Arc<[ColumnSlice]> = vec![
+            ColumnSlice::new(0, 5, false), // "Hello"
+            ColumnSlice::new(7, 5, false), // "World"
+            ColumnSlice::null(),           // NULL column
+        ]
+        .into();
+        let meta = Arc::new(ColMetaData::new(vec![
+            Column::new("greeting", 0, "VARBINARY"),
+            Column::new("subject", 1, "VARBINARY"),
+            Column::new("nullable", 2, "VARBINARY"),
+        ]));
+
+        let row = Row::new(buffer, slices, meta);
+
+        // Get stream for first column
+        let reader = row.get_stream(0).unwrap();
+        assert_eq!(reader.len(), Some(5));
+        assert_eq!(reader.as_bytes().as_ref(), b"Hello");
+
+        // Get stream for second column
+        let reader = row.get_stream(1).unwrap();
+        assert_eq!(reader.len(), Some(5));
+        assert_eq!(reader.as_bytes().as_ref(), b"World");
+
+        // NULL column returns None
+        assert!(row.get_stream(2).is_none());
+
+        // Out of bounds returns None
+        assert!(row.get_stream(99).is_none());
+    }
+
+    #[test]
+    fn test_row_get_stream_by_name() {
+        let buffer = Arc::new(Bytes::from_static(b"Binary data here"));
+        let slices: Arc<[ColumnSlice]> = vec![ColumnSlice::new(0, 11, false)].into();
+        let meta = Arc::new(ColMetaData::new(vec![Column::new(
+            "document",
+            0,
+            "VARBINARY",
+        )]));
+
+        let row = Row::new(buffer, slices, meta);
+
+        // Get by name (case-insensitive)
+        let reader = row.get_stream_by_name("document").unwrap();
+        assert_eq!(reader.len(), Some(11));
+
+        let reader = row.get_stream_by_name("DOCUMENT").unwrap();
+        assert_eq!(reader.len(), Some(11));
+
+        // Unknown column returns None
+        assert!(row.get_stream_by_name("unknown").is_none());
     }
 }

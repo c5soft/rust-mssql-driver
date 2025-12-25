@@ -73,6 +73,7 @@
 pub mod blob;
 pub mod bulk;
 pub mod cancel;
+pub mod change_tracking;
 pub mod client;
 pub mod config;
 pub mod encryption;
@@ -122,4 +123,9 @@ pub use encryption::{
 // OpenTelemetry instrumentation (available whether or not otel feature is enabled)
 pub use instrumentation::{
     DatabaseMetrics, OperationTimer, SanitizationConfig, attributes, metric_names, span_names,
+};
+
+// Change Tracking support
+pub use change_tracking::{
+    ChangeMetadata, ChangeOperation, ChangeTracking, ChangeTrackingQuery, SyncVersionStatus,
 };

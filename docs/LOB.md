@@ -85,6 +85,36 @@ if let Some(row) = stream.next().await {
 }
 ```
 
+### Streaming LOBs
+
+For large binary data, use `get_stream()` to get a `BlobReader` that implements `AsyncRead`:
+
+```rust
+use tokio::io::copy;
+
+let mut stream = client.query(
+    "SELECT data FROM files WHERE id = @p1",
+    &[&file_id]
+).await?;
+
+if let Some(row) = stream.next().await {
+    let row = row?;
+
+    // Get streaming reader for the VARBINARY(MAX) column
+    if let Some(mut reader) = row.get_stream(0) {
+        // Stream directly to a file
+        let mut file = tokio::fs::File::create("output.bin").await?;
+        copy(&mut reader, &mut file).await?;
+    }
+}
+```
+
+The `BlobReader` provides:
+- `len()` - Total size (for progress tracking)
+- `bytes_read()` - Bytes consumed so far
+- `remaining()` - Bytes left to read
+- `rewind()` - Reset position for re-reading
+
 ### Writing LOBs
 
 ```rust

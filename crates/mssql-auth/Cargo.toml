@@ -27,6 +27,12 @@ zeroize = ["dep:zeroize"]
 # Always Encrypted client-side encryption support
 # Provides AEAD_AES_256_CBC_HMAC_SHA256 encryption and RSA-OAEP key unwrapping
 always-encrypted = ["dep:aes", "dep:cbc", "dep:hmac", "dep:sha2", "dep:rsa", "dep:rand", "dep:parking_lot"]
+# Azure Key Vault CMK provider for Always Encrypted
+# Requires always-encrypted feature and Azure authentication
+azure-keyvault = ["always-encrypted", "dep:azure_security_keyvault_keys", "dep:azure_identity", "dep:azure_core", "dep:url"]
+# Windows Certificate Store CMK provider for Always Encrypted (Windows only)
+# Requires always-encrypted feature
+windows-certstore = ["always-encrypted", "dep:windows"]
 
 [dependencies]
 thiserror = { workspace = true }
@@ -59,6 +65,14 @@ sha2 = { version = "0.10", optional = true }
 rsa = { version = "0.9", features = ["sha2"], optional = true }
 rand = { version = "0.8", optional = true }
 parking_lot = { version = "0.12", optional = true }
+
+# Optional: Azure Key Vault CMK provider
+azure_security_keyvault_keys = { workspace = true, optional = true }
+url = { version = "2.5", optional = true }
+
+# Optional: Windows Certificate Store CMK provider (Windows only)
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.59", features = ["Win32_Security_Cryptography", "Win32_Foundation"], optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }

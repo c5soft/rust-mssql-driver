@@ -132,22 +132,22 @@ impl CertificateAuth {
 
         let cert_secret = Secret::new(cert_b64);
 
-        // Password for the certificate (empty string if not provided)
-        let cert_password = Secret::new(password.unwrap_or("").to_string());
-
-        // Create options with default token credential options
-        // send_certificate_chain=false means we send only the leaf certificate
-        let options = ClientCertificateCredentialOptions::new(
-            azure_identity::TokenCredentialOptions::default(),
-            false, // send_certificate_chain
-        );
+        // Create options with password if provided
+        // Note: send_certificate_chain is now controlled by AZURE_CLIENT_SEND_CERTIFICATE_CHAIN env var
+        let options = if let Some(pwd) = password {
+            ClientCertificateCredentialOptions {
+                password: Some(Secret::new(pwd.to_string())),
+                ..Default::default()
+            }
+        } else {
+            ClientCertificateCredentialOptions::default()
+        };
 
         let credential = ClientCertificateCredential::new(
             tenant_id.as_ref().to_string(),
             client_id.into(),
             cert_secret,
-            cert_password,
-            options,
+            Some(options),
         )
         .map_err(|e| {
             AuthError::Certificate(format!("Failed to create certificate credential: {}", e))

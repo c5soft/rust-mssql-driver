@@ -8,12 +8,12 @@
 //! ## Features
 //!
 //! - `sp_reset_connection` execution on connection return
-//! - Health checks via `SELECT 1`
+//! - Configurable health checks (default: `SELECT 1`)
 //! - Configurable min/max pool sizes
-//! - Connection timeout and idle timeout
-//! - Automatic reconnection on transient failures
+//! - Connection timeout, idle timeout, and max lifetime
+//! - Background reaper task for expired connection cleanup
+//! - Comprehensive metrics (wait queue depth, acquisition time, etc.)
 //! - Per-connection prepared statement cache management
-//! - Comprehensive metrics for observability
 //!
 //! ## Example
 //!
@@ -30,10 +30,11 @@
 //!     .build()
 //!     .await?;
 //!
-//! // Or using PoolConfig directly
+//! // Or using PoolConfig directly with custom health check
 //! let config = PoolConfig::new()
 //!     .min_connections(5)
-//!     .max_connections(20);
+//!     .max_connections(20)
+//!     .health_check_query("SELECT 1 FROM sys.databases WHERE name = 'mydb'");
 //!
 //! let pool = Pool::new(config).await?;
 //!
@@ -42,13 +43,15 @@
 //! // Use connection...
 //! // Connection automatically returned to pool on drop
 //!
-//! // Check pool status
+//! // Check pool status (includes wait queue depth)
 //! let status = pool.status();
 //! println!("Pool utilization: {:.1}%", status.utilization());
+//! println!("Wait queue depth: {}", status.wait_queue_depth);
 //!
-//! // Get metrics
+//! // Get metrics (includes acquisition time, expiration stats, etc.)
 //! let metrics = pool.metrics();
 //! println!("Checkout success rate: {:.2}", metrics.checkout_success_rate());
+//! println!("Avg acquisition time: {:?}", metrics.avg_acquisition_time());
 //! ```
 
 #![warn(missing_docs)]
@@ -60,7 +63,7 @@ pub mod lifecycle;
 pub mod pool;
 
 // Configuration
-pub use config::PoolConfig;
+pub use config::{DEFAULT_HEALTH_CHECK_QUERY, PoolConfig};
 
 // Error types
 pub use error::PoolError;

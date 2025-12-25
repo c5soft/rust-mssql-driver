@@ -159,10 +159,24 @@ SELECT OrgNode.ToString() AS OrgPath FROM OrgChart;
 
 | Type | Status | Rationale |
 |------|--------|-----------|
-| CLR UDTs | Not Supported | Requires .NET CLR integration and type metadata |
-| Alias Types | Supported | Treated as their underlying base type |
+| CLR UDTs | ⚠️ Partial | Returns raw binary - CLR interpretation not supported |
+| Alias Types | ✅ Supported | Treated as their underlying base type |
 
-**Workaround:** Convert UDTs to standard types in your queries.
+**Note:** CLR UDTs (including GEOMETRY, GEOGRAPHY, HIERARCHYID) are returned as raw binary data. The driver does not interpret the CLR binary format.
+
+**Workaround:** Convert UDTs to standard types in your queries:
+
+```sql
+-- Spatial types
+SELECT Location.STAsText() AS LocationWkt FROM Places;
+SELECT Location.STAsGeoJSON() AS LocationJson FROM Places;
+
+-- HierarchyID
+SELECT OrgNode.ToString() AS OrgPath FROM OrgChart;
+
+-- Custom CLR UDTs
+SELECT CAST(MyUdt AS VARBINARY(MAX)) FROM MyTable;
+```
 
 ### Sparse Columns
 
@@ -212,7 +226,7 @@ The driver is only tested on 64-bit platforms (x86_64, aarch64). 32-bit builds m
 
 ### Pool Metrics/Instrumentation
 
-**Status:** Basic Metrics Available
+**Status:** ✅ Comprehensive Metrics Available
 
 The pool exposes metrics via `pool.status()` and `pool.metrics()`:
 
@@ -221,35 +235,54 @@ The pool exposes metrics via `pool.status()` and `pool.metrics()`:
 | Pool size (total connections) | ✅ Available via `status().total` |
 | Available connections | ✅ Available via `status().available` |
 | In-use connections | ✅ Available via `status().in_use` |
+| Wait queue depth | ✅ Available via `status().wait_queue_depth` |
 | Connections created | ✅ Available via `metrics().connections_created` |
 | Connections closed | ✅ Available via `metrics().connections_closed` |
 | Checkout success/failure | ✅ Available via `metrics().checkouts_*` |
 | Health check stats | ✅ Available via `metrics().health_checks_*` |
 | Reset stats | ✅ Available via `metrics().resets_*` |
 | Uptime | ✅ Available via `metrics().uptime` |
-| Wait queue depth | Not Exposed |
-| Connection acquisition time histogram | Not Exposed |
-| Connection lifetime histogram | Not Exposed |
+| Connection acquisition time | ✅ Available via `metrics().avg_acquisition_time_us` |
+| Idle timeout expirations | ✅ Available via `metrics().connections_idle_expired` |
+| Lifetime expirations | ✅ Available via `metrics().connections_lifetime_expired` |
+| Peak wait queue depth | ✅ Available via `metrics().peak_wait_queue_depth` |
+| Reaper task runs | ✅ Available via `metrics().reaper_runs` |
 
 **Note:** OpenTelemetry metrics integration is available via the `otel` feature (see `DatabaseMetrics`).
 
 ### TTL-Based Connection Expiration
 
-**Status:** Not Supported
+**Status:** ✅ Implemented
 
-Connections are evicted based on LRU (Least Recently Used) policy, not time-based expiration.
+The pool includes a background reaper task that:
+- Removes connections exceeding `max_lifetime` (default: 30 minutes)
+- Removes idle connections exceeding `idle_timeout` (default: 10 minutes)
+- Maintains minimum connection count (`min_connections`)
 
-**Rationale:** LRU provides a good balance between connection reuse and resource cleanup without the complexity of background timers.
-
-**Alternative:** If you need to force connection refresh, reduce the pool size or periodically recycle the pool.
+Configuration:
+```rust
+let config = PoolConfig::new()
+    .max_lifetime(Duration::from_secs(1800))  // 30 minutes
+    .idle_timeout(Duration::from_secs(600));   // 10 minutes
+```
 
 ### Custom Health Checks
 
-**Status:** Not Supported
+**Status:** ✅ Implemented
 
-The pool uses a hardcoded `SELECT 1` query for health checks. Custom health check logic is not supported.
+The pool supports custom health check queries (default: `SELECT 1`):
 
-**Rationale:** `SELECT 1` is sufficient for connection liveness and doesn't require database-specific knowledge.
+```rust
+use mssql_driver_pool::PoolConfig;
+
+// Check specific database exists
+let config = PoolConfig::new()
+    .health_check_query("SELECT 1 FROM sys.databases WHERE name = 'mydb'");
+
+// Check server can execute functions
+let config = PoolConfig::new()
+    .health_check_query("SELECT GETDATE()");
+```
 
 ---
 
@@ -331,14 +364,22 @@ There is no built-in circuit breaker for failing connections.
 
 The following features are planned but not yet implemented:
 
-### v0.3.0 Targets
+### Implemented in v0.3.0
 
-| Feature | Description | Status |
-|---------|-------------|--------|
-| Always Encrypted (Key Providers) | Azure KeyVault, Windows CertStore | Planned (InMemoryKeyStore available) |
-| Change Tracking Integration | Built-in change tracking query support | Planned |
-| TTL-Based Pool Expiration | Time-based connection cleanup | Config defined, reaper pending |
-| Streaming LOB Support | True streaming for large objects | Planned |
+| Feature | Description |
+|---------|-------------|
+| Always Encrypted (Key Providers) | Azure KeyVault via `azure-keyvault` feature, Windows CertStore via `windows-certstore` feature |
+| Change Tracking Integration | `ChangeTrackingQuery` builder, `ChangeOperation` enum, helper SQL generators |
+| LOB Streaming API | `Row::get_stream()` method returning `BlobReader` implementing `AsyncRead` |
+
+### Implemented in v0.2.3
+
+| Feature | Description |
+|---------|-------------|
+| TTL-Based Pool Expiration | Background reaper task with idle/lifetime expiration |
+| Custom Health Checks | Configurable health check query |
+| Wait Queue Metrics | Wait queue depth and peak tracking |
+| Acquisition Time Metrics | Average connection acquisition time |
 
 ### Implemented in v0.2.0
 
@@ -355,16 +396,17 @@ The following features are planned but not yet implemented:
 
 #### Always Encrypted
 
-The cryptographic infrastructure is implemented (`always-encrypted` feature):
+Always Encrypted is fully supported with the `always-encrypted` feature:
 - AEAD_AES_256_CBC_HMAC_SHA256 encryption/decryption
 - RSA-OAEP key unwrapping for CEK decryption
 - CEK caching with TTL expiration
-- InMemoryKeyStore for testing/development
+- `InMemoryKeyStore` for testing/development
+- `AzureKeyVaultProvider` for production (via `azure-keyvault` feature)
+- `WindowsCertStoreProvider` for Windows environments (via `windows-certstore` feature)
 
-For production key stores (Azure KeyVault, Windows CertStore):
-- Implement the `KeyStoreProvider` trait for your key store
-- Use application-layer encryption before sending data to SQL Server as a fallback
-- **Do NOT use `ENCRYPTBYKEY`** as a workaround - it does not provide the same security guarantees (keys are accessible to DBAs)
+Custom key stores can be implemented via the `KeyStoreProvider` trait.
+
+**Important:** Do NOT use `ENCRYPTBYKEY` as a workaround - it does not provide the same security guarantees (keys are accessible to DBAs).
 
 ---
 
@@ -372,11 +414,20 @@ For production key stores (Azure KeyVault, Windows CertStore):
 
 ### Large Object (LOB) Streaming
 
-**Current Status:** Buffered
+**Current Status:** Streaming API Available
 
-LOBs (VARBINARY(MAX), NVARCHAR(MAX), XML) are currently buffered in memory before being returned. The `BlobReader` API provides chunked reading from this buffer.
+LOBs (VARBINARY(MAX), NVARCHAR(MAX), XML) are buffered from the network but provide a streaming API via `BlobReader`:
 
-**For LOBs over 100MB:** Consider chunking via SQL:
+```rust
+// Get streaming reader for a VARBINARY(MAX) column
+let mut reader = row.get_stream(0)?;
+
+// Stream to file without holding entire blob in user code
+let mut file = tokio::fs::File::create("output.bin").await?;
+tokio::io::copy(&mut reader, &mut file).await?;
+```
+
+**For LOBs over 100MB:** Consider chunking via SQL to reduce memory pressure:
 
 ```sql
 -- Read in chunks
@@ -461,9 +512,9 @@ We prioritize features based on community need and alignment with the driver's g
 | XML | ✅ Implemented | As String |
 | JSON (NVARCHAR) | ✅ Implemented | As String, parse in app |
 | Table-Valued Parameters | ✅ Implemented | Via `Tvp` type |
-| Geometry/Geography | ❌ Not Planned | Spatial types |
-| HierarchyID | ❌ Not Planned | Specialized type |
-| User-Defined Types | ❌ Not Planned | Only built-in types |
+| Geometry/Geography | ⚠️ Partial | Returns raw binary, use `STAsText()`/`STAsGeoJSON()` |
+| HierarchyID | ⚠️ Partial | Returns raw binary, use `.ToString()` |
+| User-Defined Types (CLR) | ⚠️ Partial | Returns raw binary (no CLR interpretation) |
 
 ### Connection Pool Matrix
 
@@ -471,12 +522,14 @@ We prioritize features based on community need and alignment with the driver's g
 |---------|--------|-------|
 | Min/Max Connections | ✅ Implemented | Configurable |
 | Connection Timeout | ✅ Implemented | Configurable |
-| Idle Timeout | ✅ Config defined | Reaper task pending |
-| Max Lifetime | ✅ Config defined | Reaper task pending |
+| Idle Timeout | ✅ Implemented | Background reaper task |
+| Max Lifetime | ✅ Implemented | Background reaper task |
 | `sp_reset_connection` | ✅ Implemented | On connection return |
-| Health Checks | ✅ Implemented | Via `SELECT 1` |
-| Pool Metrics | ✅ Implemented | Via `pool.status()` and `pool.metrics()` |
-| TTL-Based Eviction | ⏳ Planned v0.3.0 | LRU currently |
+| Health Checks | ✅ Implemented | Configurable query (default: `SELECT 1`) |
+| Pool Metrics | ✅ Implemented | Comprehensive via `pool.status()` and `pool.metrics()` |
+| TTL-Based Eviction | ✅ Implemented | Background reaper with idle/lifetime expiration |
+| Wait Queue Tracking | ✅ Implemented | Depth and peak metrics |
+| Acquisition Time Tracking | ✅ Implemented | Average acquisition time |
 
 ### Observability Matrix
 

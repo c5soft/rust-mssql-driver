@@ -90,6 +90,12 @@ pub mod key_store;
 #[cfg(feature = "always-encrypted")]
 pub mod key_unwrap;
 
+// Always Encrypted key providers
+#[cfg(feature = "azure-keyvault")]
+pub mod azure_keyvault;
+#[cfg(all(windows, feature = "windows-certstore"))]
+pub mod windows_certstore;
+
 // Core types
 pub use credentials::Credentials;
 pub use error::AuthError;
@@ -136,3 +142,9 @@ pub use aead::AeadEncryptor;
 pub use key_store::{CekCache, CekCacheKey, InMemoryKeyStore};
 #[cfg(feature = "always-encrypted")]
 pub use key_unwrap::RsaKeyUnwrapper;
+
+// Always Encrypted key providers
+#[cfg(feature = "azure-keyvault")]
+pub use azure_keyvault::AzureKeyVaultProvider;
+#[cfg(all(windows, feature = "windows-certstore"))]
+pub use windows_certstore::WindowsCertStoreProvider;

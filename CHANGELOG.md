@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2025-12-24
+
+### Added
+
+#### Always Encrypted Key Providers
+- Azure Key Vault CMK provider (`azure-identity` feature)
+  - RSA-OAEP and RSA-OAEP-256 key unwrapping
+  - Key versioning support
+  - Automatic credential management via Azure Identity SDK
+- Windows Certificate Store CMK provider (`sspi-auth` feature, Windows only)
+  - NCRYPT API integration for secure key operations
+  - Certificate thumbprint-based key lookup
+
+#### LOB Streaming
+- `Row::get_stream(index)` and `Row::get_stream_by_name(name)` methods
+- `BlobReader` integration for streaming LOB data via `AsyncRead`
+- Improved memory efficiency for large binary/text columns
+
+#### Change Tracking
+- `ChangeTrackingQuery` builder for generating CHANGETABLE queries
+- `ChangeOperation` enum (Insert, Update, Delete)
+- `ChangeMetadata` struct for tracking version info
+- `ChangeTracking` helper with SQL generation utilities
+- `SyncVersionStatus` for validating sync state
+
+#### Pool Improvements
+- `PoolMetrics` extended with:
+  - `connections_idle_expired`: Connections closed due to idle timeout
+  - `connections_lifetime_expired`: Connections closed due to max lifetime
+  - `reaper_runs`: Number of reaper task executions
+  - `peak_wait_queue_depth`: Peak wait queue observed
+  - `avg_acquisition_time_us`: Average acquisition time
+- `PoolStatus.wait_queue_depth`: Current wait queue depth
+- `PoolConfig.health_check_query`: Configurable health check SQL
+
+### Changed
+
+- **BREAKING**: `PoolConfig`, `PoolStatus`, and `PoolMetrics` are now `#[non_exhaustive]`
+  - Use builder pattern or `Default::default()` to construct
+  - Allows future field additions without breaking changes
+- Updated `azure_identity` SDK to 0.30 (API changes for `ClientCertificateCredential`)
+- Updated `azure_security_keyvault_keys` SDK to 0.9.0
+
+### Fixed
+
+- Azure Identity SDK compatibility: Updated `ClientCertificateCredential` usage for 0.30 API
+
 ## [0.2.0] - 2024-12-24
 
 ### Added

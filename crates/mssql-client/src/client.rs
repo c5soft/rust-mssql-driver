@@ -1903,6 +1903,30 @@ impl<S: ConnectionState> Client<S> {
             // TEXT type - always uses PLP encoding (deprecated LOB type)
             TypeId::Text => Self::parse_plp_varchar(buf)?,
 
+            // Legacy byte-length string types (Char, VarChar) - 1-byte length prefix
+            TypeId::Char | TypeId::VarChar => {
+                if buf.remaining() < 1 {
+                    return Err(Error::Protocol(
+                        "unexpected EOF reading legacy varchar length".into(),
+                    ));
+                }
+                let len = buf.get_u8();
+                if len == 0xFF {
+                    SqlValue::Null
+                } else if len == 0 {
+                    SqlValue::String(String::new())
+                } else if buf.remaining() < len as usize {
+                    return Err(Error::Protocol(
+                        "unexpected EOF reading legacy varchar data".into(),
+                    ));
+                } else {
+                    let data = &buf[..len as usize];
+                    let s = String::from_utf8_lossy(data).into_owned();
+                    buf.advance(len as usize);
+                    SqlValue::String(s)
+                }
+            }
+
             // Variable-length string types (BigVarChar, BigChar)
             TypeId::BigVarChar | TypeId::BigChar => {
                 // Check if this is a MAX type (uses PLP encoding)
@@ -1973,6 +1997,29 @@ impl<S: ConnectionState> Client<S> {
             // IMAGE type - always uses PLP encoding (deprecated LOB type)
             TypeId::Image => Self::parse_plp_varbinary(buf)?,
 
+            // Legacy byte-length binary types (Binary, VarBinary) - 1-byte length prefix
+            TypeId::Binary | TypeId::VarBinary => {
+                if buf.remaining() < 1 {
+                    return Err(Error::Protocol(
+                        "unexpected EOF reading legacy varbinary length".into(),
+                    ));
+                }
+                let len = buf.get_u8();
+                if len == 0xFF {
+                    SqlValue::Null
+                } else if len == 0 {
+                    SqlValue::Binary(bytes::Bytes::new())
+                } else if buf.remaining() < len as usize {
+                    return Err(Error::Protocol(
+                        "unexpected EOF reading legacy varbinary data".into(),
+                    ));
+                } else {
+                    let data = bytes::Bytes::copy_from_slice(&buf[..len as usize]);
+                    buf.advance(len as usize);
+                    SqlValue::Binary(data)
+                }
+            }
+
             // Variable-length binary types (BigVarBinary, BigBinary)
             TypeId::BigVarBinary | TypeId::BigBinary => {
                 // Check if this is a MAX type (uses PLP encoding)
@@ -2036,6 +2083,9 @@ impl<S: ConnectionState> Client<S> {
 
             // SQL_VARIANT - contains embedded type info
             TypeId::Variant => Self::parse_sql_variant(buf)?,
+
+            // UDT (User-Defined Type) - uses PLP encoding, return as binary
+            TypeId::Udt => Self::parse_plp_varbinary(buf)?,
 
             // Default: treat as binary with 2-byte length prefix
             _ => {

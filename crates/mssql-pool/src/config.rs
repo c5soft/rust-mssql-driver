@@ -1,9 +1,18 @@
 //! Pool configuration.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+/// Default health check query.
+pub const DEFAULT_HEALTH_CHECK_QUERY: &str = "SELECT 1";
+
 /// Configuration for the connection pool.
+///
+/// This struct is marked `#[non_exhaustive]` to allow adding new fields
+/// in future minor versions without breaking changes. Use the builder
+/// pattern methods or [`Default::default()`] to construct instances.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct PoolConfig {
     /// Minimum number of connections to maintain.
     pub min_connections: u32,
@@ -34,6 +43,19 @@ pub struct PoolConfig {
 
     /// Whether to run sp_reset_connection on return.
     pub sp_reset_connection: bool,
+
+    /// Custom health check query (defaults to "SELECT 1").
+    ///
+    /// This query is executed to verify a connection is healthy.
+    /// The query should be lightweight and return quickly.
+    ///
+    /// # Examples
+    ///
+    /// - `SELECT 1` - Simple ping (default)
+    /// - `SELECT @@VERSION` - Check server version
+    /// - `SELECT GETDATE()` - Check server can execute functions
+    /// - `SELECT 1 FROM sys.databases WHERE name = 'mydb'` - Check database exists
+    pub health_check_query: Arc<str>,
 }
 
 impl Default for PoolConfig {
@@ -49,6 +71,7 @@ impl Default for PoolConfig {
             health_check_interval: Duration::from_secs(30),
             reset_on_return: true,
             sp_reset_connection: true,
+            health_check_query: Arc::from(DEFAULT_HEALTH_CHECK_QUERY),
         }
     }
 }
@@ -123,6 +146,37 @@ impl PoolConfig {
         self
     }
 
+    /// Set a custom health check query.
+    ///
+    /// The query is executed to verify a connection is healthy.
+    /// It should be lightweight and return quickly.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The SQL query to use for health checks
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use mssql_driver_pool::PoolConfig;
+    ///
+    /// // Use a simple ping (default)
+    /// let config = PoolConfig::new();
+    ///
+    /// // Check database exists
+    /// let config = PoolConfig::new()
+    ///     .health_check_query("SELECT 1 FROM sys.databases WHERE name = 'mydb'");
+    ///
+    /// // Check server can execute functions
+    /// let config = PoolConfig::new()
+    ///     .health_check_query("SELECT GETDATE()");
+    /// ```
+    #[must_use]
+    pub fn health_check_query(mut self, query: impl Into<Arc<str>>) -> Self {
+        self.health_check_query = query.into();
+        self
+    }
+
     /// Validate the configuration.
     pub fn validate(&self) -> Result<(), crate::error::PoolError> {
         if self.max_connections == 0 {
@@ -152,6 +206,7 @@ mod tests {
         assert!(config.sp_reset_connection);
         assert!(config.test_on_checkout);
         assert!(!config.test_on_checkin);
+        assert_eq!(&*config.health_check_query, DEFAULT_HEALTH_CHECK_QUERY);
     }
 
     #[test]
@@ -174,6 +229,18 @@ mod tests {
         assert!(!config.test_on_checkout);
         assert!(config.test_on_checkin);
         assert!(!config.sp_reset_connection);
+    }
+
+    #[test]
+    fn test_custom_health_check_query() {
+        let custom_query = "SELECT 1 FROM sys.databases WHERE name = 'test'";
+        let config = PoolConfig::new().health_check_query(custom_query);
+
+        assert_eq!(&*config.health_check_query, custom_query);
+
+        // Also test with String
+        let config2 = PoolConfig::new().health_check_query(String::from("SELECT @@VERSION"));
+        assert_eq!(&*config2.health_check_query, "SELECT @@VERSION");
     }
 
     #[test]
