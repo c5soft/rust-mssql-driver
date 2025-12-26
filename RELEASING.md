@@ -77,9 +77,13 @@ git push origin vX.Y.Z      # Triggers automated publish
 5. [Manual Publishing](#manual-publishing)
 6. [Post-Release Verification](#post-release-verification)
 7. [CI Automation Coverage](#ci-automation-coverage)
-8. [Justfile Recipe Reference](#justfile-recipe-reference)
-9. [Troubleshooting](#troubleshooting)
-10. [Platform-Specific Notes](#platform-specific-notes)
+8. [CI Parity](#ci-parity)
+9. [Justfile Recipe Reference](#justfile-recipe-reference)
+10. [Troubleshooting](#troubleshooting)
+11. [Platform-Specific Notes](#platform-specific-notes)
+12. [Release Checklist Template](#release-checklist-template)
+13. [Manual Recovery Procedures](#manual-recovery-procedures)
+14. [Additional Resources](#additional-resources)
 
 ---
 
@@ -90,6 +94,20 @@ We follow [Semantic Versioning 2.0.0](https://semver.org/):
 - **MAJOR.MINOR.PATCH** (e.g., 1.2.3)
 - **Pre-1.0**: Minor bumps may contain breaking changes
 - **Post-1.0**: Strictly follow semver
+
+### Version Bump Guidelines
+
+| Change Type | Version Bump | Examples |
+|-------------|-------------|----------|
+| Bug fixes only | PATCH (0.1.x) | Fix query parsing, handle edge case |
+| New features (backwards compatible) | MINOR (0.x.0) | Add new API method, new error type |
+| Breaking API changes | MAJOR (x.0.0) | Remove method, change return type, rename public type |
+| Internal refactoring | PATCH | Code cleanup, dependency updates (non-breaking) |
+| Security fixes | PATCH | CVE fix, vulnerability patch |
+| Deprecation without removal | MINOR | Mark methods as deprecated (still work) |
+| Removal of deprecated API | MAJOR | Delete previously deprecated methods |
+
+**Note:** While pre-1.0, MINOR bumps may contain breaking changes. Document all breaking changes in CHANGELOG.md regardless of version number.
 
 ---
 
@@ -455,6 +473,38 @@ The following checks are **automated in CI**:
 
 ---
 
+## CI Parity
+
+Ensure your local commands match CI behavior to avoid surprise failures.
+
+### Local vs CI Commands
+
+| Check | Local Command | CI Equivalent | Notes |
+|-------|--------------|---------------|-------|
+| **Quick check** | `just quick` | N/A | Fast local feedback only |
+| **Format** | `just fmt-check` | `cargo fmt --all -- --check` | Exact match |
+| **Clippy (default)** | `just clippy` | N/A | CI uses `--all-features` |
+| **Clippy (all)** | `just clippy-all` | `cargo clippy --workspace --all-features --all-targets -- -D warnings` | **Use this before push** |
+| **Tests (default)** | `just test` | N/A | CI uses `--all-features --locked` |
+| **Tests (locked)** | `just nextest-locked-all` | `cargo nextest run --workspace --all-features --locked` | **Matches CI exactly** |
+| **Docs** | `just doc-check-all` | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` | Warnings as errors |
+| **MSRV** | `just msrv-check-all` | `cargo +1.85 check --workspace --all-features` | Uses toolchain from rust-toolchain.toml |
+| **Deny** | `just deny` | `cargo deny check` | License + advisory check |
+| **Semver** | `just semver` | `cargo semver-checks check-release --exclude mssql-testing` | Uses stable toolchain |
+
+### Feature-Specific Testing
+
+Some features require additional system dependencies:
+
+| Feature | Dependency | Install Command (Ubuntu) |
+|---------|-----------|-------------------------|
+| `integrated-auth` | libkrb5-dev | `sudo apt-get install libkrb5-dev` |
+| (bindgen) | libclang-dev | `sudo apt-get install libclang-dev` |
+
+**IMPORTANT:** Always run `just ci-all` (not `just ci`) before pushing to ensure feature-gated code compiles.
+
+---
+
 ## Justfile Recipe Reference
 
 | Checklist Section | Recipe | What It Does |
@@ -596,3 +646,136 @@ Copy this for each release:
 - [ ] docs.rs building/built
 - [ ] CHANGELOG [Unreleased] section reset
 ```
+
+---
+
+## Manual Recovery Procedures
+
+When automated processes fail, use these recovery procedures.
+
+### Recovery: Partial Publish Failure
+
+If the automated publish workflow fails mid-way (some crates published, others not):
+
+1. **Identify what published:**
+   ```bash
+   for crate in tds-protocol mssql-types mssql-tls mssql-codec mssql-auth mssql-derive mssql-client mssql-driver-pool mssql-testing; do
+       echo -n "$crate: "
+       cargo search $crate 2>/dev/null | head -1 || echo "not found"
+   done
+   ```
+
+2. **Find the last successful tier:**
+   - Tier 0: tds-protocol, mssql-types
+   - Tier 1: mssql-tls, mssql-codec, mssql-auth
+   - Tier 2: mssql-derive
+   - Tier 3: mssql-client
+   - Tier 4: mssql-driver-pool, mssql-testing
+
+3. **Resume from the failed crate:**
+   ```bash
+   # Example: mssql-client failed
+   cargo publish -p mssql-client
+   sleep 30
+   cargo publish -p mssql-driver-pool
+   cargo publish -p mssql-testing
+   ```
+
+### Recovery: Tag Created But Not Pushed
+
+If you created a tag locally but haven't pushed it:
+
+```bash
+# Delete the local tag
+git tag -d vX.Y.Z
+
+# Fix any issues, then recreate
+just release-check
+just tag
+git push origin vX.Y.Z
+```
+
+### Recovery: Tag Pushed But Workflow Failed
+
+If you pushed a tag but the GitHub Actions workflow failed:
+
+1. **Do NOT delete the tag** — tags should be immutable once pushed.
+
+2. **Fix the issue** — If it's a code issue, create a new patch version:
+   ```bash
+   # Bump to X.Y.Z+1
+   # Edit Cargo.toml and CHANGELOG.md
+   git commit -am "fix: patch release vX.Y.(Z+1)"
+   git push origin main
+   gh run watch
+   just tag  # Creates vX.Y.(Z+1)
+   git push origin vX.Y.(Z+1)
+   ```
+
+3. **If workflow issue** — Re-run the workflow:
+   ```bash
+   gh run rerun --failed
+   ```
+
+### Recovery: Wrong Version Published
+
+If you published the wrong version:
+
+1. **Yank the broken version** (cannot delete, only yank):
+   ```bash
+   for crate in tds-protocol mssql-types mssql-tls mssql-codec mssql-auth mssql-derive mssql-client mssql-driver-pool mssql-testing; do
+       cargo yank --vers X.Y.Z $crate
+   done
+   ```
+
+2. **Publish a corrected version:**
+   ```bash
+   # Bump to next patch version
+   # Edit Cargo.toml, CHANGELOG.md
+   just release-check
+   git commit -am "chore: release vX.Y.(Z+1) (fixes yanked vX.Y.Z)"
+   git push origin main
+   gh run watch
+   just tag
+   git push origin vX.Y.(Z+1)
+   ```
+
+3. **Document the yank** in CHANGELOG.md:
+   ```markdown
+   ## [X.Y.(Z+1)] - YYYY-MM-DD
+
+   ### Fixed
+   - (describe fix from yanked version)
+
+   **Note:** v X.Y.Z was yanked due to (reason).
+   ```
+
+---
+
+## Additional Resources
+
+### Official Documentation
+
+- [Semantic Versioning 2.0.0](https://semver.org/) — Version numbering standard
+- [Cargo Publishing Guide](https://doc.rust-lang.org/cargo/reference/publishing.html) — Official cargo publish docs
+- [crates.io Policies](https://crates.io/policies) — crates.io terms and policies
+
+### Tools
+
+- [cargo-semver-checks](https://github.com/obi1kenobi/cargo-semver-checks) — Detect breaking changes
+- [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) — License and advisory checks
+- [cargo-release](https://github.com/crate-ci/cargo-release) — Alternative release workflow tool
+- [GitHub CLI (gh)](https://cli.github.com/) — Required for `just ci-status`
+
+### Project-Specific Links
+
+- [Repository](https://github.com/praxiomlabs/rust-mssql-driver) — Source code
+- [crates.io: mssql-client](https://crates.io/crates/mssql-client) — Main crate
+- [docs.rs: mssql-client](https://docs.rs/mssql-client) — Documentation
+- [GitHub Actions Workflows](https://github.com/praxiomlabs/rust-mssql-driver/actions) — CI/CD status
+
+### Related Reading
+
+- [The Cargo Book: Package Layout](https://doc.rust-lang.org/cargo/guide/project-layout.html)
+- [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/) — API design best practices
+- [Keep a Changelog](https://keepachangelog.com/) — Changelog format standard
