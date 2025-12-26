@@ -588,6 +588,42 @@ test-features:
     printf '{{green}}[OK]{{reset}}   Feature matrix tests passed\n'
 
 [group('test')]
+[doc("Test zeroize feature (security-critical memory wiping)")]
+test-zeroize:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{cyan}}[INFO]{{reset}} Testing zeroize feature...\n'
+    {{cargo}} test -p mssql-client --features zeroize -j {{jobs}}
+    printf '{{green}}[OK]{{reset}}   Zeroize feature tests passed\n'
+
+[group('test')]
+[doc("Test integrated-auth feature (Linux only, requires libkrb5-dev)")]
+test-integrated-auth:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "{{platform}}" != "linux" ]]; then
+        printf '{{yellow}}[SKIP]{{reset}} integrated-auth is Linux-only\n'
+        exit 0
+    fi
+    printf '{{cyan}}[INFO]{{reset}} Testing integrated-auth feature...\n'
+    {{cargo}} test -p mssql-client --features integrated-auth -j {{jobs}}
+    printf '{{green}}[OK]{{reset}}   Integrated-auth feature tests passed\n'
+
+[group('test')]
+[doc("Verify tds-protocol no_std compatibility")]
+test-no-std:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{cyan}}[INFO]{{reset}} Checking tds-protocol no_std compatibility...\n'
+    # Check if thumbv7em target is installed
+    if ! rustup target list --installed | grep -q thumbv7em-none-eabihf; then
+        printf '{{cyan}}[INFO]{{reset}} Installing thumbv7em-none-eabihf target...\n'
+        rustup target add thumbv7em-none-eabihf
+    fi
+    {{cargo}} check -p tds-protocol --no-default-features --target thumbv7em-none-eabihf
+    printf '{{green}}[OK]{{reset}}   no_std compatibility verified\n'
+
+[group('test')]
 [doc("Run tests with cargo-nextest (default features)")]
 nextest:
     #!/usr/bin/env bash
@@ -1537,6 +1573,26 @@ publish:
     printf '\n{{green}}[OK]{{reset}}   All crates published successfully\n'
 
 [group('release')]
+[confirm("⚠️ This will YANK all crates at version " + version + ". This is for SECURITY INCIDENTS only. Continue?")]
+[doc("Yank all crates at current version (SECURITY INCIDENTS ONLY)")]
+yank-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '\n{{bold}}{{red}}════════════════════════════════════════════════════════════════{{reset}}\n'
+    printf '{{bold}}{{red}}  ⚠️  YANKING ALL CRATES AT VERSION {{version}}                    {{reset}}\n'
+    printf '{{bold}}{{red}}════════════════════════════════════════════════════════════════{{reset}}\n\n'
+    printf '{{yellow}}This action is for security incidents only.{{reset}}\n'
+    printf '{{yellow}}Yanked versions cannot be un-yanked without contacting crates.io support.{{reset}}\n\n'
+
+    for crate in tds-protocol mssql-types mssql-tls mssql-codec mssql-auth mssql-derive mssql-client mssql-driver-pool mssql-testing; do
+        printf '{{cyan}}[INFO]{{reset}} Yanking %s@{{version}}...\n' "$crate"
+        {{cargo}} yank --version {{version}} "$crate" || printf '{{yellow}}[WARN]{{reset}} Failed to yank %s (may not exist at this version)\n' "$crate"
+    done
+
+    printf '\n{{green}}[OK]{{reset}}   Yank complete for version {{version}}\n'
+    printf '{{cyan}}[NEXT]{{reset}} Prepare and publish a patched version\n'
+
+[group('release')]
 [doc("Validate dependency graph for publishing")]
 dep-graph:
     #!/usr/bin/env bash
@@ -1659,6 +1715,20 @@ bloat crate="mssql-client":
     set -euo pipefail
     printf '{{cyan}}[INFO]{{reset}} Binary size analysis for {{crate}}...\n'
     {{cargo}} bloat --release -p {{crate}} --crates
+
+[group('security')]
+[doc("Generate Software Bill of Materials (SBOM) in CycloneDX format")]
+sbom output="sbom.cyclonedx.json":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    printf '{{cyan}}[INFO]{{reset}} Generating SBOM...\n'
+    if ! command -v cargo-sbom &> /dev/null; then
+        printf '{{yellow}}[WARN]{{reset}} cargo-sbom not installed\n'
+        printf '{{cyan}}[INFO]{{reset}} Install with: cargo install cargo-sbom\n'
+        exit 1
+    fi
+    {{cargo}} sbom --output-format cyclonedx-json > {{output}}
+    printf '{{green}}[OK]{{reset}}   SBOM generated: {{output}}\n'
 
 [group('security')]
 [doc("Check for unsafe code usage")]
