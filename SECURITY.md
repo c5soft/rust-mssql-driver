@@ -185,18 +185,18 @@ Encrypt=true;TrustServerCertificate=false
 
 ### Always Encrypted Considerations
 
-**Status:** Partial support in v0.2.0 (cryptography ✅, key providers ⏳)
+**Status:** Full support in v0.3.0 (cryptography ✅, key providers ✅)
 
 The driver supports Always Encrypted client-side encryption via the `always-encrypted` feature:
 
-**Implemented (v0.2.0):**
+**Implemented (v0.3.0):**
 - AEAD_AES_256_CBC_HMAC_SHA256 encryption/decryption
 - RSA-OAEP key unwrapping for CEK decryption
 - CEK caching with TTL expiration
 - `InMemoryKeyStore` for development/testing
 - `KeyStoreProvider` trait for custom implementations
 
-**Pending (v0.3.0):**
+**Future Enhancements:**
 - Azure Key Vault key provider
 - Windows Certificate Store key provider
 
