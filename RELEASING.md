@@ -2,6 +2,8 @@
 
 Comprehensive guide for releasing new versions of rust-mssql-driver to crates.io.
 
+**Version:** 0.3.0 | **MSRV:** 1.85 | **Edition:** 2024 | **Workspace:** 9 crates
+
 ---
 
 ## ⚠️ CRITICAL: Read Before Any Release
@@ -73,17 +75,21 @@ git push origin vX.Y.Z      # Triggers automated publish
 1. [Version Numbering](#version-numbering)
 2. [Crate Dependency Graph](#crate-dependency-graph)
 3. [Pre-Release Checklist](#pre-release-checklist)
-4. [Release Workflow](#release-workflow)
-5. [Manual Publishing](#manual-publishing)
-6. [Post-Release Verification](#post-release-verification)
-7. [CI Automation Coverage](#ci-automation-coverage)
-8. [CI Parity](#ci-parity)
-9. [Justfile Recipe Reference](#justfile-recipe-reference)
-10. [Troubleshooting](#troubleshooting)
-11. [Platform-Specific Notes](#platform-specific-notes)
-12. [Release Checklist Template](#release-checklist-template)
-13. [Manual Recovery Procedures](#manual-recovery-procedures)
-14. [Additional Resources](#additional-resources)
+4. [Feature-Specific Testing](#feature-specific-testing)
+5. [Release Workflow](#release-workflow)
+6. [Manual Publishing](#manual-publishing)
+7. [Post-Release Verification](#post-release-verification)
+8. [CI Automation Coverage](#ci-automation-coverage)
+9. [CI Parity](#ci-parity)
+10. [Justfile Recipe Reference](#justfile-recipe-reference)
+11. [Troubleshooting](#troubleshooting)
+12. [Platform-Specific Notes](#platform-specific-notes)
+13. [Security Incident Response](#security-incident-response)
+14. [SBOM Generation](#sbom-generation)
+15. [Lessons Learned](#lessons-learned)
+16. [Release Checklist Template](#release-checklist-template)
+17. [Manual Recovery Procedures](#manual-recovery-procedures)
+18. [Additional Resources](#additional-resources)
 
 ---
 
@@ -259,6 +265,56 @@ just url-check        # Verify repository URLs
 - [ ] All 9 crates pass dry-run publish
 - [ ] Required metadata present (description, license, repository)
 - [ ] Repository URL is `praxiomlabs/rust-mssql-driver`
+
+---
+
+## Feature-Specific Testing
+
+This workspace has features that require specific testing and sometimes system dependencies.
+
+### Feature Matrix
+
+| Crate | Feature | Description | Test Command | System Deps |
+|-------|---------|-------------|--------------|-------------|
+| mssql-client | `default` | Standard functionality | `cargo test -p mssql-client` | None |
+| mssql-client | `zeroize` | Secure memory wiping | `cargo test -p mssql-client --features zeroize` | None |
+| mssql-client | `integrated-auth` | Kerberos/GSSAPI auth | `cargo test -p mssql-client --features integrated-auth` | libkrb5-dev |
+| tds-protocol | `no_std` | no_std compatible | `cargo check -p tds-protocol --no-default-features` | None |
+| mssql-derive | `default` | Row mapping macros | `cargo test -p mssql-derive` | None |
+| mssql-driver-pool | `default` | Connection pooling | `cargo test -p mssql-driver-pool` | None |
+
+### Critical Feature Combinations
+
+```bash
+# Test each crate's default features
+for crate in tds-protocol mssql-types mssql-tls mssql-codec mssql-auth mssql-derive mssql-client mssql-driver-pool mssql-testing; do
+    cargo test -p "$crate"
+done
+
+# Test zeroize feature (security-critical)
+cargo test -p mssql-client --features zeroize
+
+# Test integrated-auth (Linux only, requires libkrb5-dev)
+cargo test -p mssql-client --features integrated-auth
+
+# Test all features combined (the v0.2.1 lesson)
+cargo test --workspace --all-features
+
+# Test no_std compatibility for tds-protocol
+cargo check -p tds-protocol --no-default-features --target thumbv7em-none-eabihf
+```
+
+### The All-Features Rule
+
+**CRITICAL**: Before any release, always run tests with `--all-features`:
+
+```bash
+just ci-all           # Full CI with all features
+just test-all         # Tests with all features
+just clippy-all       # Clippy with all features
+```
+
+This prevents the v0.2.1 incident where feature-gated code broke but wasn't caught.
 
 ---
 
@@ -602,6 +658,170 @@ Use default features (omit `--all-features`) as Kerberos/GSSAPI is Linux-only:
 just ci      # Instead of just ci-all
 just test    # Instead of just test-all
 ```
+
+---
+
+## Security Incident Response
+
+This section documents procedures for handling security vulnerabilities in released versions.
+
+### Severity Assessment
+
+| Severity | CVSS Score | Response Time | Examples |
+|----------|------------|---------------|----------|
+| **Critical** | 9.0-10.0 | Immediate (same day) | SQL injection, auth bypass, TLS downgrade |
+| **High** | 7.0-8.9 | 24-48 hours | Credential exposure, privilege escalation |
+| **Medium** | 4.0-6.9 | 1 week | Information disclosure, DoS |
+| **Low** | 0.1-3.9 | Next release | Minor information disclosure |
+
+### Security Release Process
+
+1. **Assess and Confirm**
+   - Verify the vulnerability is real and reproducible
+   - Determine affected versions and severity
+   - Check if actively exploited
+
+2. **Develop Fix**
+   - Create fix on private branch
+   - Ensure fix doesn't introduce new issues
+   - Prepare minimal, targeted patch
+
+3. **Coordinate Disclosure** (for Critical/High)
+   - Notify affected downstream users privately if known
+   - Coordinate with security researchers if externally reported
+   - Prepare security advisory
+
+4. **Release Security Patch**
+   - Follow standard release process with expedited timeline
+   - Use PATCH version bump (e.g., 0.3.0 → 0.3.1)
+   - Document as security fix in CHANGELOG
+
+5. **Post-Release**
+   - Publish GitHub Security Advisory
+   - Request CVE if applicable
+   - Update RustSec advisory database
+
+### Yanking All Crates
+
+For severe security issues affecting the entire workspace:
+
+```bash
+VERSION="0.3.0"
+for crate in tds-protocol mssql-types mssql-tls mssql-codec mssql-auth mssql-derive mssql-client mssql-driver-pool mssql-testing; do
+    cargo yank --version "$VERSION" "$crate"
+done
+```
+
+---
+
+## SBOM Generation
+
+Software Bill of Materials (SBOM) generation is supported for supply chain transparency.
+
+### Generating SBOM
+
+```bash
+# Generate SBOM in CycloneDX format
+cargo sbom --output-format cyclonedx-json > sbom.json
+
+# Generate SBOM in SPDX format
+cargo sbom --output-format spdx-json > sbom.spdx.json
+```
+
+### CI Integration
+
+The release workflow can automatically generate and attach SBOM to GitHub releases:
+
+```yaml
+# In .github/workflows/release.yml
+- name: Generate SBOM
+  run: |
+    cargo install cargo-sbom
+    cargo sbom --output-format cyclonedx-json > sbom.cyclonedx.json
+
+- name: Upload SBOM to Release
+  run: |
+    gh release upload ${{ github.ref_name }} sbom.cyclonedx.json
+```
+
+### SBOM Best Practices
+
+1. **Generate for each release**: Attach SBOM to every GitHub release
+2. **Include all dependencies**: Use `--all-features` to capture all possible dependencies
+3. **Verify contents**: Review SBOM for unexpected dependencies before publishing
+4. **Archive historical SBOMs**: Maintain SBOMs for older versions for audit purposes
+
+---
+
+## Lessons Learned
+
+This section documents issues encountered in past releases and patterns to avoid.
+
+### 1. The v0.2.1 Incident (Feature-Gated Code)
+
+**Issue**: Released v0.2.1 with broken `zeroize` feature because we ran `cargo clippy` without `--all-features`.
+
+**What went wrong**:
+- Ran `cargo clippy` (default features only)
+- Feature-gated code in `zeroize` feature had a compilation error
+- Manually published all 9 crates before realizing the error
+- Had to yank all 9 crates and release v0.2.2
+
+**Solution**: Always use `just ci-all` instead of `just ci`. The `-all` suffix variants include `--all-features`.
+
+### 2. Circular Dev-Dependencies
+
+**Issue**: First-time publish failed due to circular dev-dependencies between mssql-derive and mssql-client.
+
+**Solution**: Temporarily comment out circular dev-deps, publish in tier order, then restore. Document this in the release guide.
+
+### 3. crates.io Index Propagation
+
+**Issue**: Publishing mssql-client immediately after mssql-tls caused "package not found" errors.
+
+**Solution**: Wait 30 seconds between tiers. The automated workflow handles this correctly.
+
+### 4. MSRV Compliance
+
+**Issue**: Used Rust 2024 edition features without updating MSRV documentation.
+
+**Solution**: Run `just msrv-check-all` before every release. CI enforces this automatically.
+
+### 5. Tag Format Consistency
+
+**Issue**: Tags without `v` prefix don't trigger release workflow.
+
+**Solution**: Always use `just tag` which enforces the `vX.Y.Z` format.
+
+### 6. Manual Publishing Bypass
+
+**Issue**: Manual `cargo publish` bypasses all CI checks and has caused broken releases.
+
+**Solution**: Only use manual publishing as absolute last resort. Document the v0.2.1 incident as a cautionary tale.
+
+### 7. Integration Test Dependencies
+
+**Issue**: Integration tests require SQL Server container, which isn't always available in CI.
+
+**Solution**: Integration tests are in a separate CI job that may be skipped. Document this in CI coverage.
+
+### 8. Platform-Specific Features
+
+**Issue**: `integrated-auth` feature requires libkrb5-dev on Linux, causing CI failures on macOS/Windows.
+
+**Solution**: Use feature matrix in CI. Local devs on macOS/Windows should use `just ci` not `just ci-all`.
+
+### 9. Semver Exclusions
+
+**Issue**: mssql-testing crate has relaxed API stability, causing semver-checks failures.
+
+**Solution**: Exclude mssql-testing from semver-checks. Test utilities don't need strict API stability.
+
+### 10. Workspace Version Sync
+
+**Issue**: Forgot to update all crate versions, causing dependency resolution failures.
+
+**Solution**: Use workspace.package.version inheritance. All crates share the same version automatically.
 
 ---
 
