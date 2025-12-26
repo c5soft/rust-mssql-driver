@@ -39,7 +39,7 @@ Refer to `ARCHITECTURE.md` (v1.2.0) for complete details. Critical decisions:
 | DBA Access | Cannot see plaintext | Can see plaintext |
 | Threat Model | Protects FROM server | Protects ON server |
 
-Always Encrypted cryptography is implemented via the `always-encrypted` feature. Key providers (Azure Key Vault, Windows CertStore) are pending for v0.3.0. Options:
+Always Encrypted cryptography is implemented via the `always-encrypted` feature. Key providers (InMemoryKeyStore, KeyStoreProvider trait) are available in v0.3.0. Azure Key Vault and Windows CertStore providers are planned for a future release. Options:
 1. Use `InMemoryKeyStore` for development/testing
 2. Implement the `KeyStoreProvider` trait for custom key storage
 3. Use application-layer encryption as an alternative
