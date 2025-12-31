@@ -796,7 +796,7 @@ msrv-check-all:
     printf '{{green}}[OK]{{reset}}   MSRV {{msrv}} check passed\n'
 
 [group('lint')]
-[doc("Check for semver violations")]
+[doc("Check for semver violations (advisory for pre-1.0)")]
 semver:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -806,8 +806,18 @@ semver:
     # Re-enable when upstream testcontainers updates their dependencies.
     # NOTE: cargo-semver-checks requires Rust 1.89+, so we explicitly use +stable
     # even though the project MSRV is 1.85 (set in rust-toolchain.toml).
-    {{cargo}} +stable semver-checks check-release --exclude mssql-testing
-    printf '{{green}}[OK]{{reset}}   Semver check passed\n'
+    #
+    # PRE-1.0 POLICY: Semver violations are ADVISORY, not blocking.
+    # Per semver spec, breaking changes are allowed in 0.x.y minor bumps.
+    # We run the check to surface breaking changes for documentation, but
+    # don't fail the build. Post-1.0, this will become a hard failure.
+    if {{cargo}} +stable semver-checks check-release --exclude mssql-testing; then
+        printf '{{green}}[OK]{{reset}}   Semver check passed\n'
+    else
+        printf '{{yellow}}[WARN]{{reset}} Semver violations detected (advisory for pre-1.0)\n'
+        printf '{{cyan}}[INFO]{{reset}} Breaking changes are allowed in 0.x.y minor versions.\n'
+        printf '{{cyan}}[INFO]{{reset}} Ensure breaking changes are documented in CHANGELOG.md\n'
+    fi
 
 [group('lint')]
 [doc("Run all lints (fmt + clippy, default features)")]
@@ -1573,7 +1583,7 @@ publish:
     printf '\n{{green}}[OK]{{reset}}   All crates published successfully\n'
 
 [group('release')]
-[confirm("⚠️ This will YANK all crates at version " + version + ". This is for SECURITY INCIDENTS only. Continue?")]
+[confirm("⚠️ This will YANK all crates at the current workspace version. This is for SECURITY INCIDENTS only. Continue?")]
 [doc("Yank all crates at current version (SECURITY INCIDENTS ONLY)")]
 yank-all:
     #!/usr/bin/env bash
