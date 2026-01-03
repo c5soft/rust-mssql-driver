@@ -46,6 +46,11 @@ jobs:
             -p mssql-client --bench client \
             -- --output-format bencher 2>&1 | tee benchmark-output.txt
 
+      # Clean up any changes to Cargo.lock before switching branches
+      # The benchmark action needs a clean working directory to switch to gh-pages
+      - name: Clean working directory
+        run: git checkout -- Cargo.lock || true
+
       # Store benchmark results on main branch
       - name: Store benchmark result
         if: github.ref == 'refs/heads/main'
