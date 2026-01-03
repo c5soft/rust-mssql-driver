@@ -94,7 +94,7 @@ let plaintext = cipher.decrypt(nonce, &ciphertext)?;
 
 **Important:** Do NOT use SQL Server's `ENCRYPTBYKEY` as a workaround. It provides different security guarantees (keys stored on server, DBAs can access plaintext).
 
-**Timeline:** Azure Key Vault key provider is planned for v0.3.0.
+**Available Key Providers:** Azure Key Vault (`azure-identity` feature), Windows Certificate Store (`sspi-auth` feature).
 
 ---
 

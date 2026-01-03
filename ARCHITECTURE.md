@@ -1,7 +1,7 @@
 # Architectural Reference: High-Performance Rust MS SQL Driver
 
-**Version:** 1.4.0
-**Status:** Design Complete (v0.3.0 Released)
+**Version:** 1.5.0
+**Status:** Design Complete (v0.5.0 Released)
 **Target Protocol:** MS-TDS 7.3 – 8.0 (SQL Server 2008 – 2025)
 **Toolchain Standard:** Rust 2024 Edition (v1.85+, released February 20, 2025)
 **MSRV Policy:** Rust 1.85.0 (6-month rolling window)
@@ -707,7 +707,7 @@ resolver = "2"
 members = ["crates/*", "xtask"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -728,7 +728,7 @@ serde_json = "1.0"
 
 # TLS
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
-webpki-roots = "0.26"
+webpki-roots = "1.0"
 
 # Error handling
 thiserror = "2.0"
@@ -740,9 +740,9 @@ opentelemetry-otlp = { version = "0.31", optional = true }
 tracing-opentelemetry = { version = "0.32", optional = true }
 
 # Testing
-criterion = { version = "0.5", features = ["async_tokio"] }
+criterion = { version = "0.7", features = ["async_tokio"] }
 proptest = "1.5"
-testcontainers = "0.23"
+testcontainers = "0.25"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
@@ -1996,11 +1996,19 @@ msrv:
 - [x] Streaming LOB API (`Row::get_stream()` → `BlobReader`)
 - [x] Change Tracking integration (`ChangeTrackingQuery`, `ChangeOperation`)
 
-**v0.4.0 Roadmap:**
-- [ ] `#[derive(Tvp)]` macro
-- [ ] True network-level LOB streaming
+**v0.4.0 Delivered:**
+- [x] TDS 7.3 protocol support (SQL Server 2008/2008 R2)
+- [x] `TdsVersion` configuration API
+- [x] Version negotiation and detection
+
+**v0.5.0 Delivered:**
+- [x] Collation-aware VARCHAR decoding (`encoding` feature)
+- [x] `Column` struct marked `#[non_exhaustive]`
+- [x] Windows code page support (1252, 1251, 1250, etc.)
 
 **v1.0.0+ Roadmap:**
+- [ ] `#[derive(Tvp)]` macro (procedural)
+- [ ] True network-level LOB streaming
 - [ ] Connection resiliency improvements
 
 ---
@@ -2048,7 +2056,8 @@ msrv:
 | `cert-auth` | ❌ | None (uses rustls) | Stable |
 | `otel` | ❌ | `opentelemetry`, `tracing-opentelemetry` | Stable |
 | `zeroize` | ❌ | `zeroize` for credential cleanup | Stable |
-| `always-encrypted` | ❌ | Cryptography dependencies | Stable (key providers pending) |
+| `always-encrypted` | ❌ | Cryptography dependencies | Stable |
+| `encoding` | ❌ | `encoding_rs` | Stable |
 
 ### 8.4 Migration Guide from Tiberius
 
@@ -2158,6 +2167,8 @@ let client = Client::connect(&connection_string).await?;
 | 1.1.0 | 2025-12-11 | Security guidance corrections (ADR-013 Always Encrypted), savepoint validation, prepared statement lifecycle (§4.5), Azure SQL routing (§4.6), OpenTelemetry 0.31, version constraint policy, cargo-deny/hakari integration, native async trait guidance, migration guide updates |
 | 1.2.0 | 2025-12-24 | Updated for v0.2.0 release: Phase 5 auth complete, ADR-013 status updated (cryptography implemented), feature flag matrix expanded, v0.2.0 delivered features documented, v0.3.0 roadmap updated |
 | 1.3.0 | 2025-12-25 | Updated for v0.3.0 release: Always Encrypted key providers (InMemoryKeyStore, KeyStoreProvider trait), true LOB streaming (LobStream), Change Tracking integration, all 12 data type parsing fixes complete |
+| 1.4.0 | 2025-12-31 | Updated for v0.4.0 release: TDS 7.3 protocol support (SQL Server 2008/2008 R2), TdsVersion configuration, version negotiation |
+| 1.5.0 | 2026-01-01 | Updated for v0.5.0 release: Collation-aware VARCHAR decoding, encoding feature, Column marked non_exhaustive |
 
 ---
 

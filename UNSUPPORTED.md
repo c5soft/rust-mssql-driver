@@ -552,7 +552,7 @@ We prioritize features based on community need and alignment with the driver's g
 | Credential Zeroization | ✅ Implemented | `zeroize` feature |
 | SQL Injection Prevention | ✅ Implemented | Parameterized queries |
 | Always Encrypted (Cryptography) | ✅ Implemented | AEAD, RSA-OAEP, CEK caching |
-| Always Encrypted (Key Providers) | ⏳ Planned v0.3.0 | Azure KeyVault, Windows CertStore |
+| Always Encrypted (Key Providers) | ✅ Implemented | Azure KeyVault, Windows CertStore |
 
 ### SQL Server Version Support
 

@@ -230,7 +230,7 @@ async fn query_with_fallback(
 ```toml
 # Cargo.toml
 [dependencies]
-mssql-client = { version = "0.2", features = ["otel"] }
+mssql-client = { version = "0.5", features = ["otel"] }
 ```
 
 ```rust

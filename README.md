@@ -17,7 +17,7 @@ A high-performance, async Microsoft SQL Server driver for Rust.
 - **Pure Rust TLS** - Uses rustls, no OpenSSL dependency
 - **Modern Rust** - 2024 Edition, MSRV 1.85
 
-### Feature Status (v0.3.x)
+### Feature Status (v0.5.x)
 
 | Feature | Status | Notes |
 |---------|--------|-------|
@@ -35,7 +35,7 @@ A high-performance, async Microsoft SQL Server driver for Rust.
 | Windows SSPI | ✅ | Via `sspi-auth` feature |
 | Table-Valued Parameters | ✅ | Via `Tvp` type |
 | OpenTelemetry Metrics | ✅ | Via `otel` feature |
-| Always Encrypted | ⏳ | Cryptography implemented, key providers planned |
+| Always Encrypted | ✅ | Full support with Azure Key Vault and Windows CertStore providers |
 
 ## Installation
 
@@ -43,7 +43,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-mssql-client = "0.3"
+mssql-client = "0.5"
 tokio = { version = "1.48", features = ["full"] }
 ```
 
@@ -209,14 +209,15 @@ for result in rows {
 | `sspi-auth` | Windows SSPI (cross-platform via sspi-rs) |
 | `cert-auth` | Client certificate authentication |
 | `zeroize` | Secure credential wiping from memory |
-| `always-encrypted` | Client-side encryption (cryptography implemented) |
+| `always-encrypted` | Client-side encryption with key providers |
+| `encoding` | Collation-aware VARCHAR decoding |
 
 Enable optional features:
 
 ```toml
 [dependencies]
-mssql-client = { version = "0.3", features = ["otel"] }
-mssql-auth = { version = "0.3", features = ["sspi-auth"] }
+mssql-client = { version = "0.5", features = ["otel"] }
+mssql-auth = { version = "0.5", features = ["sspi-auth"] }
 ```
 
 ## SQL Server Compatibility

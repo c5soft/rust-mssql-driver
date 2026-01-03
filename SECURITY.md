@@ -189,16 +189,14 @@ Encrypt=true;TrustServerCertificate=false
 
 The driver supports Always Encrypted client-side encryption via the `always-encrypted` feature:
 
-**Implemented (v0.3.0):**
+**Implemented:**
 - AEAD_AES_256_CBC_HMAC_SHA256 encryption/decryption
 - RSA-OAEP key unwrapping for CEK decryption
 - CEK caching with TTL expiration
 - `InMemoryKeyStore` for development/testing
 - `KeyStoreProvider` trait for custom implementations
-
-**Future Enhancements:**
-- Azure Key Vault key provider
-- Windows Certificate Store key provider
+- `AzureKeyVaultProvider` for Azure Key Vault (`azure-identity` feature)
+- `WindowsCertStoreProvider` for Windows Certificate Store (`sspi-auth` feature, Windows only)
 
 Always Encrypted provides **client-side encryption** for data that remains encrypted even on the SQL Server. This protects against threats from the server side:
 
@@ -211,9 +209,9 @@ Always Encrypted provides **client-side encryption** for data that remains encry
 
 **If your threat model includes malicious DBAs or server compromise:**
 1. Use the `always-encrypted` feature with `InMemoryKeyStore` for dev/test
-2. Implement the `KeyStoreProvider` trait for your production key store
-3. Wait for v0.3.0 for Azure Key Vault / Windows CertStore providers
-4. As a fallback, implement application-layer encryption before sending to SQL
+2. Use `AzureKeyVaultProvider` for Azure Key Vault integration
+3. Use `WindowsCertStoreProvider` for Windows Certificate Store (Windows only)
+4. Implement the `KeyStoreProvider` trait for custom key storage
 5. Do NOT use T-SQL `ENCRYPTBYKEY` - keys exist on the server
 
 See [ARCHITECTURE.md § ADR-013](ARCHITECTURE.md) for details.
@@ -404,7 +402,7 @@ client.query(sql, &[]).await.map_err(|e| format!("{:?}", e))?;
 ### Optional (Feature Flags)
 
 - `zeroize` - Secure credential wiping
-- `always-encrypted` - Client-side encryption (cryptography implemented, production key providers in v0.3.0)
+- `always-encrypted` - Client-side encryption with Azure Key Vault and Windows CertStore providers
 - `otel` - Security event tracing (with care around sensitive data)
 
 ## Dependency Security
