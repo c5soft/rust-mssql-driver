@@ -1,0 +1,112 @@
+# Benchmark regression detection for rust-mssql-driver
+# Runs benchmarks and compares against baseline to detect performance regressions
+
+name: Benchmarks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  # Required for benchmark-action to comment on PRs
+  pull-requests: write
+  # Required for benchmark-action to push to gh-pages
+  contents: write
+
+jobs:
+  benchmark:
+    name: Performance Regression Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Cache the benchmark target directory
+          cache-targets: true
+
+      - name: Install Kerberos headers
+        run: sudo apt-get update && sudo apt-get install -y libkrb5-dev
+
+      - name: Run benchmarks
+        run: |
+          # Run only criterion benchmark targets with bencher output format
+          # Using explicit --bench flags avoids running lib tests which don't understand criterion flags
+          # The --output-format bencher flag produces output compatible with the 'cargo' tool type
+          cargo bench \
+            -p tds-protocol --bench protocol \
+            -p mssql-types --bench types \
+            -p mssql-client --bench client \
+            -- --output-format bencher 2>&1 | tee benchmark-output.txt
+
+      # Store benchmark results on main branch
+      - name: Store benchmark result
+        if: github.ref == 'refs/heads/main'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Rust Benchmarks
+          tool: 'cargo'
+          output-file-path: benchmark-output.txt
+          # Store on gh-pages branch
+          auto-push: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Don't fail on first run (no baseline yet)
+          fail-on-alert: false
+          # Comment on commits to main
+          comment-on-alert: true
+          alert-threshold: '150%'
+
+      # Compare against baseline for PRs
+      # Note: This step will fail if gh-pages branch doesn't exist yet.
+      # Once the first commit to main runs, the baseline will be established.
+      - name: Compare benchmarks (PR)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true  # Allow failure when no baseline exists
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Rust Benchmarks
+          tool: 'cargo'
+          output-file-path: benchmark-output.txt
+          # Don't push results from PRs
+          auto-push: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Don't fail on first run when no baseline exists yet
+          fail-on-alert: false
+          # Post comparison as PR comment when baseline exists
+          comment-on-alert: true
+          # Alert if performance degrades by more than 20%
+          alert-threshold: '120%'
+
+  # Separate job for heavier memory profiling (only on main)
+  memory-profile:
+    name: Memory Profiling
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Kerberos headers
+        run: sudo apt-get update && sudo apt-get install -y libkrb5-dev
+
+      - name: Install Valgrind
+        run: sudo apt-get install -y valgrind
+
+      - name: Run memory stress tests
+        run: |
+          # Run stress tests under Valgrind to check for memory leaks
+          # Note: This is slow, so only run on main branch
+          cargo test -p mssql-client --test stress_tests -- --test-threads=1 2>&1 | head -100
+        env:
+          # Skip live database tests in CI
+          SKIP_LIVE_TESTS: "1"

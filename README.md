@@ -36,6 +36,8 @@ A high-performance, async Microsoft SQL Server driver for Rust.
 | Table-Valued Parameters | ✅ | Via `Tvp` type |
 | OpenTelemetry Metrics | ✅ | Via `otel` feature |
 | Always Encrypted | ✅ | Full support with Azure Key Vault and Windows CertStore providers |
+| Query Cancellation | ✅ | ATTENTION signal support |
+| Collation-Aware Decoding | ✅ | 14+ character encodings |
 
 ## Installation
 
@@ -193,12 +195,13 @@ for result in rows {
 
 | Feature | Default | Description |
 |---------|---------|-------------|
-| `otel` | No | OpenTelemetry tracing and metrics |
-| `zeroize` | No | Secure credential wiping |
 | `chrono` | Yes | Date/time type support via chrono |
 | `uuid` | Yes | UUID type support |
 | `decimal` | Yes | Decimal type support via rust_decimal |
-| `json` | Yes | JSON type support via serde_json |
+| `encoding` | Yes | Collation-aware VARCHAR decoding |
+| `json` | No | JSON type support via serde_json |
+| `otel` | No | OpenTelemetry tracing and metrics |
+| `zeroize` | No | Secure credential wiping |
 
 ### Authentication Features (mssql-auth crate)
 
@@ -210,7 +213,6 @@ for result in rows {
 | `cert-auth` | Client certificate authentication |
 | `zeroize` | Secure credential wiping from memory |
 | `always-encrypted` | Client-side encryption with key providers |
-| `encoding` | Collation-aware VARCHAR decoding |
 
 Enable optional features:
 
@@ -283,6 +285,17 @@ See the [`examples/`](crates/mssql-client/examples/) directory:
 - [LIMITATIONS.md](LIMITATIONS.md) - Known limitations and workarounds
 - [UNSUPPORTED.md](UNSUPPORTED.md) - Explicitly unsupported features with rationale
 - [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) - Production readiness checklist
+
+### Operational Docs
+
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) - Production deployment guide
+- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) - Common issues and solutions
+- [docs/CONNECTION_RECOVERY.md](docs/CONNECTION_RECOVERY.md) - Connection recovery and resilience
+- [docs/ERRORS.md](docs/ERRORS.md) - Error codes and handling
+- [docs/RETRY_STRATEGY.md](docs/RETRY_STRATEGY.md) - Retry policies and backoff
+- [docs/TIMEOUTS.md](docs/TIMEOUTS.md) - Timeout configuration
+- [docs/POOL_METRICS.md](docs/POOL_METRICS.md) - Pool metrics and monitoring
+- [docs/MIGRATION_FROM_TIBERIUS.md](docs/MIGRATION_FROM_TIBERIUS.md) - Migration guide
 
 ### Crate-Specific Documentation
 
