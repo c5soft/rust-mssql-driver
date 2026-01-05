@@ -321,6 +321,26 @@ pub struct Config {
     /// When false, encryption is used only if the server requires it.
     pub encrypt: bool,
 
+    /// Disable TLS entirely and connect with plaintext.
+    ///
+    /// **⚠️ SECURITY WARNING:** This completely disables TLS/SSL encryption.
+    /// Credentials and data will be transmitted in plaintext. Only use this
+    /// for development/testing on trusted networks with legacy SQL Server
+    /// instances that don't support modern TLS versions.
+    ///
+    /// This option exists for compatibility with legacy SQL Server versions
+    /// (2008 and earlier) that may only support TLS 1.0/1.1, which modern
+    /// TLS libraries (like rustls) don't support for security reasons.
+    ///
+    /// When `true`:
+    /// - Overrides the `encrypt` setting
+    /// - Sends `ENCRYPT_NOT_SUP` in PreLogin
+    /// - No TLS handshake occurs
+    /// - All traffic including login credentials is unencrypted
+    ///
+    /// **Do not use in production without understanding the security implications.**
+    pub no_tls: bool,
+
     /// Redirect handling configuration (for Azure SQL).
     pub redirect: RedirectConfig,
 
@@ -363,6 +383,7 @@ impl Default for Config {
             instance: None,
             mars: false,
             encrypt: true, // Default to encrypted for security
+            no_tls: false, // Never plaintext by default
             redirect: RedirectConfig::default(),
             retry: RetryPolicy::default(),
             timeouts,
@@ -458,20 +479,28 @@ impl Config {
                         || value == "1";
                 }
                 "encrypt" => {
-                    // Handle encryption levels: strict, true, false, yes, no, 1, 0
+                    // Handle encryption levels: strict, true, false, yes, no, 1, 0, no_tls
                     if value.eq_ignore_ascii_case("strict") {
                         config.strict_mode = true;
                         config.encrypt = true;
+                        config.no_tls = false;
+                    } else if value.eq_ignore_ascii_case("no_tls") {
+                        // Tiberius-compatible option for truly unencrypted connections.
+                        // This is for legacy SQL Server instances that don't support TLS 1.2+.
+                        config.no_tls = true;
+                        config.encrypt = false;
                     } else if value.eq_ignore_ascii_case("true")
                         || value.eq_ignore_ascii_case("yes")
                         || value == "1"
                     {
                         config.encrypt = true;
+                        config.no_tls = false;
                     } else if value.eq_ignore_ascii_case("false")
                         || value.eq_ignore_ascii_case("no")
                         || value == "0"
                     {
                         config.encrypt = false;
+                        config.no_tls = false;
                     }
                 }
                 "multipleactiveresultsets" | "mars" => {
@@ -616,6 +645,49 @@ impl Config {
     #[must_use]
     pub fn encrypt(mut self, enabled: bool) -> Self {
         self.encrypt = enabled;
+        self
+    }
+
+    /// Disable TLS entirely and connect with plaintext (Tiberius-compatible).
+    ///
+    /// **⚠️ SECURITY WARNING:** This completely disables TLS/SSL encryption.
+    /// Credentials and all data will be transmitted in plaintext over the network.
+    ///
+    /// # When to use this
+    ///
+    /// This option exists for compatibility with legacy SQL Server versions
+    /// (2008 and earlier) that may only support TLS 1.0/1.1. Modern TLS libraries
+    /// like rustls require TLS 1.2 or higher for security reasons, making it
+    /// impossible to establish encrypted connections to these older servers.
+    ///
+    /// # Security implications
+    ///
+    /// When enabled:
+    /// - Login credentials are sent in plaintext
+    /// - All query data is transmitted without encryption
+    /// - Network traffic can be intercepted and read by attackers
+    ///
+    /// **Only use this for development/testing on isolated, trusted networks.**
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Connection string (Tiberius-compatible)
+    /// let config = Config::from_connection_string(
+    ///     "Server=legacy-server;User Id=sa;Password=secret;Encrypt=no_tls"
+    /// )?;
+    ///
+    /// // Builder API
+    /// let config = Config::new()
+    ///     .host("legacy-server")
+    ///     .no_tls(true);
+    /// ```
+    #[must_use]
+    pub fn no_tls(mut self, enabled: bool) -> Self {
+        self.no_tls = enabled;
+        if enabled {
+            self.encrypt = false;
+        }
         self
     }
 
@@ -942,5 +1014,41 @@ mod tests {
 
         let result = Config::from_connection_string("Server=localhost;TDSVersion=9.0;");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_connection_string_no_tls() {
+        // no_tls should disable TLS entirely
+        let config = Config::from_connection_string("Server=legacy;Encrypt=no_tls;").unwrap();
+        assert!(config.no_tls);
+        assert!(!config.encrypt);
+        assert!(!config.strict_mode);
+
+        // Case insensitive
+        let config = Config::from_connection_string("Server=legacy;Encrypt=no_tls;").unwrap();
+        assert!(config.no_tls);
+
+        // Encrypt=true should disable no_tls
+        let config = Config::from_connection_string("Server=localhost;Encrypt=true;").unwrap();
+        assert!(!config.no_tls);
+        assert!(config.encrypt);
+
+        // Encrypt=strict should disable no_tls
+        let config = Config::from_connection_string("Server=localhost;Encrypt=strict;").unwrap();
+        assert!(!config.no_tls);
+        assert!(config.encrypt);
+        assert!(config.strict_mode);
+    }
+
+    #[test]
+    fn test_no_tls_builder() {
+        // Builder method
+        let config = Config::new().no_tls(true);
+        assert!(config.no_tls);
+        assert!(!config.encrypt);
+
+        // Disable
+        let config = Config::new().no_tls(true).no_tls(false);
+        assert!(!config.no_tls);
     }
 }

@@ -229,8 +229,16 @@ impl Client<Disconnected> {
         tracing::debug!("using TDS 7.x flow (PreLogin first)");
 
         // Build PreLogin packet
-        // Use EncryptionLevel::On if client wants encryption, Off otherwise
-        let client_encryption = if config.encrypt {
+        // Determine client encryption level based on configuration
+        let client_encryption = if config.no_tls {
+            // no_tls: Completely disable TLS
+            tracing::warn!(
+                "⚠️  no_tls mode enabled. Connection will be UNENCRYPTED. \
+                 Credentials and data will be transmitted in plaintext. \
+                 This should only be used for development/testing with legacy SQL Server."
+            );
+            EncryptionLevel::NotSupported
+        } else if config.encrypt {
             EncryptionLevel::On
         } else {
             EncryptionLevel::Off
@@ -274,34 +282,45 @@ impl Client<Disconnected> {
         let prelogin_response =
             PreLogin::decode(&response_buf[..]).map_err(|e| Error::Protocol(e.to_string()))?;
 
-        // Log negotiated TDS version
-        let server_version = prelogin_response.version;
-        let client_version = config.tds_version;
-        tracing::debug!(
-            client_version = %client_version,
-            server_version = %server_version,
-            server_sql_version = server_version.sql_server_version_name(),
-            "TDS version negotiation"
-        );
-
-        // Warn if server returned a lower version than requested
-        if server_version < client_version && !client_version.is_tds_8() {
-            tracing::warn!(
-                client_version = %client_version,
-                server_version = %server_version,
-                "Server supports lower TDS version than requested. \
-                 Connection will use server's version: {}",
-                server_version.sql_server_version_name()
+        // Log PreLogin response
+        // Note: The server sends its SQL Server product version in PreLogin,
+        // NOT the TDS protocol version. The actual TDS version is negotiated
+        // in the LOGINACK token after login.
+        let client_tds_version = config.tds_version;
+        if let Some(ref server_version) = prelogin_response.server_version {
+            tracing::debug!(
+                requested_tds_version = %client_tds_version,
+                server_product_version = %server_version,
+                server_product = server_version.product_name(),
+                max_tds_version = %server_version.max_tds_version(),
+                "PreLogin response received"
             );
-        }
 
-        // Check for legacy version (TDS 7.2 or earlier)
-        if server_version.is_legacy() {
-            tracing::warn!(
-                server_version = %server_version,
-                "Server uses legacy TDS version ({}). \
-                 Some features may not be available.",
-                server_version.sql_server_version_name()
+            // Warn if the server's max TDS version is lower than requested
+            let server_max_tds = server_version.max_tds_version();
+            if server_max_tds < client_tds_version && !client_tds_version.is_tds_8() {
+                tracing::warn!(
+                    requested_tds_version = %client_tds_version,
+                    server_max_tds_version = %server_max_tds,
+                    server_product = server_version.product_name(),
+                    "Server supports lower TDS version than requested. \
+                     Connection will use server's maximum: {}",
+                    server_max_tds
+                );
+            }
+
+            // Warn about legacy SQL Server versions (2005 and earlier)
+            if server_max_tds.is_legacy() {
+                tracing::warn!(
+                    server_product = server_version.product_name(),
+                    server_max_tds_version = %server_max_tds,
+                    "Server uses legacy TDS version. Some features may not be available."
+                );
+            }
+        } else {
+            tracing::debug!(
+                requested_tds_version = %client_tds_version,
+                "PreLogin response received (no version info)"
             );
         }
 
@@ -1082,16 +1101,16 @@ impl<S: ConnectionState> Client<S> {
         // Encode end marker
         encoder.encode_end(&mut buf);
 
-        // Create RPC param with TVP type info
-        // For TVP, we use a special type info that indicates the parameter is a TVP
-        // The type info is encoded as part of the TVP data itself
-        let type_info = RpcTypeInfo {
-            type_id: 0xF3, // TVP type
-            max_length: None,
-            precision: None,
-            scale: None,
-            collation: None,
+        // Build the full TVP type name (schema.TypeName)
+        let full_type_name = if tvp_data.schema.is_empty() {
+            tvp_data.type_name.clone()
+        } else {
+            format!("{}.{}", tvp_data.schema, tvp_data.type_name)
         };
+
+        // Create RPC param with TVP type info
+        // The type info includes the TVP type name for parameter declarations
+        let type_info = RpcTypeInfo::tvp(&full_type_name);
 
         Ok(RpcParam {
             name: name.to_string(),
