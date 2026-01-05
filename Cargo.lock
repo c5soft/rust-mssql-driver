@@ -2257,7 +2257,6 @@ dependencies = [
  "mssql-auth",
  "mssql-codec",
  "mssql-derive",
- "mssql-driver-pool",
  "mssql-tls",
  "mssql-types",
  "once_cell",
